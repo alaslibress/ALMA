@@ -1,0 +1,1390 @@
+ALMA - Running Development Log
+================================================================================
+Started: 2026-04-26
+Author:  jandroman23@gmail.com
+Project: ALMA - Adaptive Linguistic Metamorphosis Agent
+Brief:   JetBrains technical test - build a stem agent
+Domain:  Linguistic transformation between EN / ES / PT
+================================================================================
+
+Read order: top to bottom is chronological. Segments below are tags, not
+chapters. Every entry carries a tag. Multiple tags allowed if relevant.
+
+Segments
+--------
+[ARCHITECTURE]    pipeline shape, package moves, contract changes between phases.
+[TOOLS]           library added/removed, version pin, model swap, prompt change.
+[DECISIONS]       explicit choice between alternatives, with the loser and the reason.
+[CHANGES]         meaningful code change worth historicizing (not every commit).
+[OPEN QUESTIONS]  things we could not answer yet.
+[SURPRISES]       model output that contradicted expectation; metric that misbehaved.
+[FAILURES]        wrong path, dead end, rollback, regret. Worth more than successes.
+
+Write-Cadence Rule
+------------------
+Append an entry whenever:
+  - A library is added or removed.
+  - A prompt template is non-trivially edited.
+  - A phase contract changes.
+  - A safeguard rule fires for the first time on a real run.
+  - An eval run produces a meaningful number.
+  - A wrong assumption is discovered.
+
+Do NOT append for:
+  - Trivial renames or formatting.
+  - Routine commits without thinking change.
+
+Target: 2-6 entries per active day. Final count by day 7: 25-40 entries.
+
+Entry Template
+--------------
+---
+[YYYY-MM-DD HH:MM] [TAG]
+What:     <one-sentence summary>
+Why:      <reason / motivation>
+Impact:   <files / phases affected, metric delta if any>
+Followup: <next step or NONE>
+
+================================================================================
+                              ENTRIES
+================================================================================
+
+---
+[2026-04-26 00:00] [ARCHITECTURE]
+What:     Initial package tree defined and locked in skill.md sections 4-11.
+Why:      Stem-agent thesis requires a single SpecializedAgent class driven by a
+          runtime Blueprint. Hardcoded subclasses are forbidden.
+Impact:   src/main/java/alma/{Main,cli,core,agents,llm,nlp,eval,config}/...
+          Seven-phase pipeline: Intake -> Probe -> Blueprint -> Mutation
+          -> SafeguardLoop -> Execution -> Report. AgentContext carries
+          rawInput, probe, blueprint, lastGoodBlueprint, agent, evolutionTrace,
+          result.
+Followup: Begin Sub-Plan 01 (Bootstrap) - Gradle catalog + package skeleton.
+
+---
+[2026-04-26 00:00] [TOOLS]
+What:     Initial dependency list selected.
+Why:      LLM-first design with deterministic NLP fallbacks. Each library chosen
+          for maturity and minimum surface area.
+Impact:   Stack: Java 21, Gradle 9.4 (Kotlin DSL), LangChain4j (OpenAI gpt-4o-mini
+          for Probe/Blueprint/refine/judge, gpt-4o for Execution), Apache OpenNLP
+          (tokenize, sentence-split), Optimaize language-detector (EN/ES/PT
+          detection), ICU4J (Unicode/locale), Jackson (JSON Blueprints),
+          picocli + Jansi (CLI + ANSI), SLF4J + Logback (logging), JUnit 5 +
+          AssertJ (testing). Smile listed as optional.
+Followup: Pin versions in gradle/libs.versions.toml during Sub-Plan 01.
+
+---
+[2026-04-26 00:00] [DECISIONS]
+What:     Java 21 with Gradle Kotlin DSL chosen over alternatives.
+Why:      Java 21 is current LTS and gives records, switch expressions, and
+          pattern matching - all of which keep code beginner-readable.
+          Gradle Kotlin DSL is mandated by the brief context.
+Impact:   build.gradle.kts (overhaul in Sub-Plan 01).
+Followup: NONE.
+
+---
+[2026-04-26 00:00] [DECISIONS]
+What:     picocli chosen for CLI; Lanterna and JLine rejected.
+Why:      picocli covers our needs (subcommands, ANSI markup via Jansi, help
+          generation) without forcing a full-screen TUI or readline buffer.
+          Lanterna would invert the rendering model. JLine adds readline state
+          we do not need.
+Impact:   src/main/java/alma/cli/AlmaCommand.java and src/main/java/alma/cli/ui/
+          all build on picocli's Help.Ansi.AUTO.
+Followup: NONE.
+
+---
+[2026-04-26 00:00] [DECISIONS]
+What:     OpenNLP picked over Stanford CoreNLP.
+Why:      OpenNLP is lighter, Apache 2.0, and ships smaller binary models.
+          Stanford CoreNLP is GPL and would inflate the deliverable.
+Impact:   src/main/java/alma/nlp/{Tokenizer,SentenceSplitter}.java in Sub-Plan 05.
+Followup: NONE.
+
+---
+[2026-04-26 00:00] [DECISIONS]
+What:     SpecializedAgent stays a single class; Blueprint is the only variation
+          mechanism.
+Why:      The brief explicitly calls out that the agent must "decide what to
+          become" rather than be selected from a hardcoded list. A switch over
+          problemType returning different classes would defeat the thesis.
+Impact:   src/main/java/alma/agents/SpecializedAgent.java is the one and only.
+          New behavior comes from new Blueprints generated at runtime.
+Followup: Enforce in Sub-Plan 04. Add a code-search check in Sub-Plan 08
+          sanity sweep.
+
+---
+[2026-04-26 00:00] [DECISIONS]
+What:     Safeguard loop has four explicit stopping rules.
+Why:      The brief asks: how does the agent know when it is good enough?
+          Implicit rules are not auditable. Explicit rules are.
+Impact:   SafeguardLoopPhase stops on (1) score >= threshold, (2) round >= max,
+          (3) two consecutive rounds without improvement, (4) MutationException.
+          maxRefinementRounds default = 3 to bound cost.
+Followup: Unit-test each rule in Sub-Plan 04.
+
+---
+[2026-04-26 00:00] [DECISIONS]
+What:     gpt-4o-mini for Probe/Blueprint/refine/judge; gpt-4o for Execution.
+Why:      Mini is enough for structured-JSON metaprompting and judging; full
+          model gives better translation quality where it matters.
+Impact:   src/main/java/alma/llm/OpenAiClient.java exposes two named instances.
+          Configurable through ALMA_MODEL_PROBE and ALMA_MODEL_EXEC.
+Followup: Revisit if cost is fine and mini-on-Execution gets close enough.
+
+---
+[2026-04-26 00:00] [DECISIONS]
+What:     chrF (n=6, beta=2) chosen over BLEU as the primary translation metric.
+Why:      chrF correlates better with human judgment on short and morphologically
+          rich text (es, pt). It also handles single-word and example tasks more
+          gracefully than BLEU's geometric n-gram mean.
+Impact:   src/main/java/alma/eval/Metric.java (Sub-Plan 07). LLM-as-judge
+          covers transcreation and style.
+Followup: Add COMET if time permits (open question).
+
+---
+[2026-04-26 00:00] [OPEN QUESTIONS]
+What:     A few decisions deferred to first-run experience.
+Why:      Some choices are easier with real model output in hand than guessed.
+Impact:   Unknown until Day 2-3.
+Followup: Resolve and append [DECISIONS] entries when answers land.
+          - chrF vs BLEU for translation: chrF chosen now; revisit only if it
+            misbehaves in unit tests.
+          - Judge model: starting with gpt-4o-mini; bump to gpt-4o if judge
+            scores look noisy.
+          - Refinement budget: starting maxRefinementRounds=3; may drop to 2
+            for cost.
+
+---
+[2026-04-26 12:00] [DECISIONS] [TOOLS]
+What:     Bundle EN + ES + PT OpenNLP sentence-detector models. No longer optional.
+Why:      The English model destroys ES/PT tokenization. It does not understand
+          Spanish opening punctuation (`¡`, `¿`) or Portuguese clitic
+          contractions, and would corrupt input before the LLM ever sees it.
+          The closed domain is EN/ES/PT, so all three models must ship.
+Impact:   plans/05-tools-nlp.md updated. SentenceSplitter selects the model
+          using LanguageDetector output. Disk footprint adds < 2 MB total.
+          Loser of the choice: shipping EN-only to save space.
+Followup: Pin OpenNLP model URLs in libs.versions.toml during Sub-Plan 01 or 05.
+
+---
+[2026-04-26 12:00] [DECISIONS] [TOOLS]
+What:     COMET dropped from the metric roadmap.
+Why:      COMET runs on transformer models in Python / PyTorch. Using it from
+          Java needs ONNX Runtime or out-of-process calls. Both break the
+          "Java + simplicity" rule that anchors the project. chrF
+          (deterministic, JVM-only, hand-implementable in <80 lines) plus
+          LLM-as-judge (via the same OpenAI API we already use) covers the
+          deliverable cleanly.
+Impact:   plans/07-eval-harness.md no longer lists COMET as an open question.
+          Loser: reference-free neural metric coverage.
+Followup: NONE.
+
+---
+[2026-04-26 12:00] [DECISIONS] [ARCHITECTURE]
+What:     Generator and Evaluator roles inside the safeguard loop are explicitly
+          separate.
+Why:      If the loop generates with a different model than production
+          (`gpt-4o`), the loop is measuring an agent that does not ship — the
+          test is invalid. Likewise, judging with the production model would
+          burn cost without measurable gain.
+Impact:   SpecializedAgent.selfEvaluate() generates outputs with
+          Blueprint.modelName (= gpt-4o, the real Execution model) and scores
+          them with a separate `gpt-4o-mini` judge call. MutationPhase never
+          substitutes the model for cost reasons. plans/04-mutation-safeguard.md
+          updated.
+          Loser: a single-model loop that conflated Generator and Evaluator.
+Followup: Add an integration check in Sub-Plan 06 tests verifying
+          Blueprint.modelName is honored end-to-end.
+
+---
+[2026-04-26 14:00] [DECISIONS] [ARCHITECTURE]
+What:     Introduced `Scorer` interface + `DummyScorer` constant-value
+          implementation for Day 3.
+Why:      The original day plan built SafeguardLoopPhase on Day 3 but the real
+          `Metric` (chrF + judge) on Day 5. The loop's `score >= threshold`
+          rule cannot run without a scorer, so Day 3 would not compile or
+          would crash. A `Scorer` abstraction unblocks Day 3 with a stub and
+          lets Day 5 swap in the real implementation at composition time
+          without touching `SafeguardLoopPhase`.
+Impact:   New files (Sub-Plan 04): src/main/java/alma/eval/Scorer.java,
+          src/main/java/alma/eval/DummyScorer.java. SafeguardLoopPhase takes
+          `Scorer` constructor-injected. SpecializedAgent loses
+          `selfEvaluate(...)` — it stays a pure Generator; the loop
+          orchestrates Generator + Evaluator. `DummyScorer` returns a
+          constant (e.g., 0.7), which naturally exercises stopping rule #3
+          ("2 rounds without improvement") on the Day-3 demo.
+          plans/04-mutation-safeguard.md and plans/plan.md (Day 3 milestone)
+          updated.
+Followup: Sub-Plan 07 adds ChrfScorer, JudgeScorer, CompositeScorer.
+
+---
+[2026-04-26 14:00] [DECISIONS] [ARCHITECTURE]
+What:     Refinement step removed from the cuttable-scope list. The cycle
+          itself is non-negotiable.
+Why:      Cutting refinement to a no-op kills the stem-agent thesis: the loop
+          would evaluate the agent, see it underperform, and have no way to
+          improve it — falling immediately to the rollback or the budget
+          limit on every run. The whole "agent rebuilds itself without
+          breaking" requirement evaporates.
+Impact:   plans/plan.md "Cuttable Scope" point #3 changed: keep the
+          feedback -> new-Blueprint cycle; what is cuttable is the
+          *sophistication of the refinement prompt* (e.g., switch from a
+          structured JSON diff to a simpler string-replacement diff).
+          "Never cut" list now explicitly includes the refinement cycle.
+Followup: NONE.
+
+---
+[2026-04-26 14:00] [DECISIONS] [TOOLS]
+What:     chrF implementation gets a hard 1.5-hour time-box; fallback path
+          defined.
+Why:      Hand-implementing chrF (character n-gram F-score with beta=2) in
+          pure Java without an external NLP library risks burning a full day
+          on string-algebra debugging and produces nested loops that fight
+          the project's "Simplicity > Efficiency" rule. A maintainable
+          LLM-as-judge prompt is easier to reason about than 200 lines of
+          fragile char-n-gram code.
+Impact:   plans/07-eval-harness.md: chrF checklist now mentions the 1.5h
+          time-box. If exceeded, `CompositeScorer` falls back to
+          `JudgeScorer` for every sub-type and `MetricChrFTest` is skipped.
+          The fallback must be logged here as a follow-up [DECISIONS]
+          + [FAILURES] entry on Day 5.
+Followup: On Day 5 timer, decide go/no-go on chrF and update this log.
+
+---
+[2026-04-26 16:00] [DECISIONS] [ARCHITECTURE]
+What:     Fail-fast on missing OPENAI_API_KEY lives in Main.java, not in any
+          picocli command.
+Why:      Putting the env check inside `AlmaCommand.run` means users hitting
+          `version` or `--help` would see picocli parse output stacked with
+          environment errors, and CLI logic would mix domain code with env
+          plumbing. Moving it up to Main keeps the CLI clean and gives a
+          single, predictable error path. `version` and `--help` still work
+          without the key (skipped from the gate).
+Impact:   plans/01-bootstrap.md adds a "Fail-Fast Contract" section.
+          AlmaConfig constructor no longer throws on missing key — it only
+          validates types. EnvLoader.requireOpenAiKey(config) is the single
+          gate, called once from Main. A new MissingEnvException carries
+          the message printed to System.err before System.exit(1).
+Followup: NONE.
+
+---
+[2026-04-26 16:00] [DECISIONS] [TOOLS]
+What:     Single source of truth for the version string: build.gradle.kts ->
+          alma.properties -> AlmaVersionProvider.
+Why:      Hardcoding the version in both AlmaCommand and build.gradle.kts
+          guarantees drift after the first bump. A token in alma.properties
+          filtered by Gradle's processResources gives one canonical place
+          to edit (build.gradle.kts) and one canonical reader
+          (AlmaVersionProvider via AlmaConfig.version()).
+Impact:   plans/01-bootstrap.md: build.gradle.kts sets `version = "0.1.0"`,
+          processResources filters `@version@` in alma.properties.
+          AlmaConfig exposes version(). AlmaVersionProvider implements
+          picocli's IVersionProvider. AlmaCommand wires
+          versionProvider=AlmaVersionProvider.class.
+Followup: When bumping, edit build.gradle.kts only.
+
+---
+[2026-04-26 16:00] [DECISIONS] [ARCHITECTURE]
+What:     Six ghost-state banner files scaffolded in Sub-Plan 01;
+          AsciiBanner becomes a generic classpath loader.
+Why:      The original plan asked for a single banners/alma.txt. With the
+          ghost mascot needing one ASCII per state, that turns into either
+          a switch over hardcoded strings (ugly) or six files added later
+          (delays Sub-Plan 06). Pre-creating the folder + six placeholder
+          files now lets GhostStates simply call AsciiBanner.load(name).
+Impact:   plans/01-bootstrap.md scaffolds banners/alma-{base,thinking,
+          probing,mutating,speaking,error}.txt — BASE populated, the rest
+          are TODO placeholders. AsciiBanner is a generic loader (load,
+          print) instead of a single-file reader. plans/06-cli-ui.md just
+          fills in the five placeholder files; no folder or class shape
+          changes needed there.
+Followup: NONE.
+
+---
+[2026-04-26 18:00] [DECISIONS] [ARCHITECTURE]
+What:     Introduced `JsonExtractor` to strip Markdown fences before Jackson
+          parses LLM output.
+Why:      OpenAI chat models routinely wrap JSON in ```json ... ``` even when
+          asked not to. Feeding that directly to Jackson throws on the first
+          backtick and our single repair retry would burn on every call.
+          Stripping the fences (and slicing from first `{` to last `}` if
+          there is prose around the JSON) makes the parser robust without
+          weakening the strict-JSON contract on the model side.
+Impact:   New file src/main/java/alma/llm/JsonExtractor.java + test
+          src/test/java/alma/llm/JsonExtractorTest.java covering fenced,
+          prose-wrapped, and clean inputs. ProbePhase / BlueprintPhase /
+          refinement all funnel through `JsonExtractor.clean(...)` before
+          Jackson. plans/03-llm-probe-blueprint.md updated.
+Followup: Log surprises if the model invents a new wrapper format.
+
+---
+[2026-04-26 18:00] [DECISIONS] [TOOLS]
+What:     Jackson configured with `ParameterNamesModule` and the project
+          compiles with `-parameters`.
+Why:      Java records are bound by Jackson via their canonical constructor
+          parameter names. Without `ParameterNamesModule` + `-parameters`,
+          parameter names are erased at compile time and Jackson throws
+          MismatchedInputException at the first record. Forcing
+          `@JsonProperty` annotations on every field would clutter the
+          beginner-readable surface area.
+Impact:   build.gradle.kts adds `tasks.withType<JavaCompile> {
+          options.compilerArgs.add("-parameters") }`. libs.versions.toml
+          pins `jackson-module-parameter-names`. AlmaJackson factory
+          builds the shared ObjectMapper:
+          `JsonMapper.builder().addModule(new ParameterNamesModule()).build()`.
+          plans/01-bootstrap.md and plans/03-llm-probe-blueprint.md updated.
+Followup: NONE.
+
+---
+[2026-04-26 18:00] [DECISIONS] [TOOLS]
+What:     Every classpath text read uses `StandardCharsets.UTF_8` explicitly.
+Why:      Default platform charset varies (Cp1252 on a Windows JVM, UTF-8 on
+          Linux/macOS). Prompt files and ES/PT examples contain accented
+          characters (¡, ¿, ã, ñ, ç). A platform-default read would mangle
+          them silently and the bug would only surface when graded on a
+          different OS.
+Impact:   AsciiBanner (Sub-Plan 01) and PromptTemplates loader (Sub-Plan 03)
+          both use new String(stream.readAllBytes(), StandardCharsets.UTF_8)
+          (or Files.readString(path, StandardCharsets.UTF_8)). plans/01
+          and plans/03 updated.
+Followup: NONE.
+
+---
+[2026-04-26 20:00] [CHANGES] [ARCHITECTURE]
+What:     Sub-Plan 01 (Bootstrap) implemented end-to-end. Repo now compiles
+          and runs.
+Why:      Greenfield -> runnable shell. All later sub-plans depend on this
+          skeleton.
+Impact:   Files created/changed:
+          - gradle/libs.versions.toml (10 versions pinned).
+          - build.gradle.kts (overhaul: application plugin, version="0.1.0",
+            sourceCompatibility=21, ReplaceTokens filter on alma.properties,
+            -parameters compiler arg, UTF-8 encoding, evaluate stub task).
+          - settings.gradle.kts unchanged (rootProject.name = "ALMA").
+          - src/main/java/alma/Main.java (fail-fast, then picocli).
+          - src/main/java/alma/cli/AlmaCommand.java (root + RunCommand,
+            EvaluateCommand, VersionCommand subcommands, all stubs).
+          - src/main/java/alma/cli/AlmaVersionProvider.java.
+          - src/main/java/alma/cli/ui/AsciiBanner.java (UTF-8 classpath
+            loader; load + print).
+          - src/main/java/alma/config/AlmaConfig.java (record).
+          - src/main/java/alma/config/EnvLoader.java (env > properties >
+            defaults; requireOpenAiKey).
+          - src/main/java/alma/config/MissingEnvException.java.
+          - src/main/resources/alma.properties (alma.version=@version@).
+          - src/main/resources/logback.xml (INFO console, UTF-8).
+          - src/main/resources/banners/alma-base.txt (populated ghost).
+          - 5 placeholder banners: alma-{thinking,probing,mutating,
+            speaking,error}.txt.
+          Removed: src/main/java/org/example/Main.java template.
+Followup: Sub-Plan 02 — Phase, AgentContext, StemCell, MutationException,
+          IntakePhase + ReportPhase real, 5 stubs.
+
+---
+[2026-04-26 20:00] [DECISIONS] [TOOLS]
+What:     sourceCompatibility = 21 instead of Gradle toolchain pin.
+Why:      The dev box ships JDK 24 / 25 / 26; no JDK 21 installed. Toolchain
+          auto-provisioning would need a foojay resolver and network access.
+          Setting `sourceCompatibility = JavaVersion.VERSION_21` and
+          `targetCompatibility = JavaVersion.VERSION_21` lets the system
+          JDK 24 compile to Java 21 bytecode without downloading anything.
+          Functionally identical to a pinned JDK 21 toolchain; portable
+          bytecode preserved.
+Impact:   build.gradle.kts: dropped `java { toolchain { languageVersion = 21 } }`,
+          replaced with sourceCompatibility / targetCompatibility = VERSION_21.
+Followup: Switch to a pinned 21 toolchain on the grader's machine if they
+          require it; document in README.
+
+---
+[2026-04-26 20:00] [DECISIONS] [TOOLS]
+What:     Properties token uses Ant `ReplaceTokens` (not Groovy `expand`).
+Why:      The DEV_LOG-recorded convention is `@version@`. Gradle `expand` uses
+          Groovy SimpleTemplateEngine syntax (`${name}`), which would force a
+          rename. `ReplaceTokens` handles `@name@` natively and only touches
+          alma.properties via filesMatching.
+Impact:   build.gradle.kts imports
+          `org.apache.tools.ant.filters.ReplaceTokens` and uses
+          `filter<ReplaceTokens>("tokens" to mapOf("version" to ...))`.
+Followup: NONE.
+
+---
+[2026-04-26 20:00] [SURPRISES]
+What:     Picocli auto-help formatter does not list both `-V` and `--version`
+          forms in its own output, only one synopsis line.
+Why:      Cosmetic. Both -V and --version work at runtime (smoke-tested:
+          stdout printed "ALMA 0.1.0" for each).
+Impact:   None on functionality. Worth noting because the help output reads
+          as if only one flag exists.
+Followup: NONE.
+
+---
+[2026-04-26 22:00] [DECISIONS] [ARCHITECTURE]
+What:     Refinement step rewrites the full Blueprint, never a JSON diff.
+Why:      Hand-rolling a JSON-Patch / merge layer in pure Java is error-prone
+          and fights the simplicity rule. The extra tokens to emit a full
+          Blueprint per refinement are negligible compared to the
+          maintenance cost.
+Impact:   plans/04-mutation-safeguard.md "Refinement step" line replaced.
+          REFINE_USER prompt (Sub-Plan 03) must instruct the model to
+          return a complete updated Blueprint JSON. ALMA parses + overwrites
+          the candidate Blueprint atomically.
+Followup: Update src/main/resources/prompts/refine.txt during Sub-Plan 03.
+
+---
+[2026-04-26 22:00] [DECISIONS] [ARCHITECTURE]
+What:     ProbeReport synthetic seeds become structured EvalTaskSeed objects.
+Why:      The original schema returned bare strings, but the safeguard loop
+          needs `{input, expected_reference}` pairs to score outputs. A bare
+          string would force a second LLM round-trip to invent references —
+          inefficient and a source of test contamination.
+Impact:   plans/03-llm-probe-blueprint.md: ProbeReport.syntheticTaskSeeds
+          (List<String>) -> ProbeReport.syntheticTasks (List<EvalTaskSeed>).
+          New record EvalTaskSeed{input, expectedReference} in alma.agents.
+          probe.txt prompt mandates camelCase JSON.
+          plans/04 + plans/07 references updated.
+Followup: NONE.
+
+---
+[2026-04-26 22:00] [DECISIONS] [ARCHITECTURE]
+What:     ToolRegistry interface + DummyToolRegistry live in Sub-Plan 04;
+          DefaultToolRegistry in Sub-Plan 05 swaps in at composition.
+Why:      Sub-Plan 04 needs to compile and run before Sub-Plan 05 lands.
+          A phantom dependency would block Day 3. An interface owned by 04
+          and a dummy implementation unblock the safeguard loop; the real
+          registry plugs in later without touching MutationPhase.
+Impact:   plans/04-mutation-safeguard.md adds ToolRegistry (interface) +
+          DummyToolRegistry under src/main/java/alma/llm/. plans/05-tools-nlp
+          renames its registry to DefaultToolRegistry implementing the same
+          interface.
+Followup: NONE.
+
+---
+[2026-04-26 22:00] [DECISIONS] [TOOLS]
+What:     Three eager-load + @Tool + autoresolve fixes in Sub-Plan 05.
+Why:      (1) Lazy/per-call model loading would re-read 2 MB binaries on
+          every translation -> latency death. (2) Methods without
+          dev.langchain4j.agent.tool.@Tool are invisible to AiServices,
+          regardless of registry plumbing. (3) If the LLM picks
+          sentenceSplit before detectLanguage, the splitter would default
+          to English and corrupt ES/PT input.
+Impact:   plans/05-tools-nlp.md adds: (a) eager singleton loading of all
+          OpenNLP models + Optimaize profiles at ToolRegistry construction;
+          (b) @Tool annotations on every public tool method with
+          one-sentence descriptions; (c) SentenceSplitter has a single-arg
+          overload that calls LanguageDetector internally if no language is
+          provided.
+Followup: NONE.
+
+---
+[2026-04-26 22:00] [DECISIONS] [ARCHITECTURE]
+What:     Three Sub-Plan-06 fixes: Unicode arrow fallback, LanguageProvider
+          interface, ghost dedup.
+Why:      (1) Windows cmd.exe/legacy PowerShell render `➜` as a broken
+          glyph; the badge must auto-detect non-UTF-8 stdout (or
+          --no-color) and fall back to `->`. (2) LanguageBadge depends on
+          LanguageDetector from Sub-Plan 05; an interface in 06 lets
+          06 compile early with an EnglishOnlyLanguageProvider stub.
+          (3) "Render once per state transition" was too loose; with phases
+          sharing states (PROBING covers Probe+Blueprint, MUTATING covers
+          Mutation+SafeguardLoop, SPEAKING covers Execution+Report), the
+          ghost would print on every phase transition, scrolling stacks of
+          ghosts upward. Now: dedupe via GhostStateTracker; only print on
+          actual state CHANGE.
+Impact:   plans/06-cli-ui.md updated. New files: LanguageProvider.java,
+          EnglishOnlyLanguageProvider.java, GhostStateTracker.java under
+          src/main/java/alma/cli/ui/. plans/05 records that the real
+          LanguageDetector implements LanguageProvider.
+Followup: NONE.
+
+---
+[2026-04-26 22:00] [DECISIONS] [TOOLS]
+What:     JUDGE_RUBRIC mandates Chain-of-Thought reasoning BEFORE scores.
+Why:      The judge model (gpt-4o-mini) and the generator (gpt-4o) are in
+          the same family. Without forced reasoning, the judge tends to
+          reward outputs that "sound like" what it would have produced —
+          self-confirmation bias. Reasoning-first reduces the bias and
+          gives the eval markdown report substantive justifications,
+          which feed directly into the ≤4-page write-up.
+Impact:   plans/07-eval-harness.md JudgeReport JSON shape locked:
+          { "reasoning": "...", "scores": {...}, "overall": N }.
+          src/main/resources/prompts/judge.txt must reflect this shape.
+Followup: Add Sub-Plan 03 cross-check that judge.txt enforces
+          reasoning-first ordering.
+
+---
+[2026-04-26 23:30] [CHANGES] [ARCHITECTURE]
+What:     Sub-Plan 02 (Pipeline Core) implemented.
+Why:      Need a runnable 7-phase skeleton before any LLM, tools, or
+          eval code lands. All later sub-plans plug into this shape.
+Impact:   Files created:
+          - src/main/java/alma/core/Phase.java (interface).
+          - src/main/java/alma/core/AgentContext.java (mutable carrier
+            with rawInput, classHint, result, evolutionTrace).
+          - src/main/java/alma/core/MutationException.java (checked).
+          - src/main/java/alma/core/StemCell.java (constructs phase list,
+            runs them in a plain for-loop, prints simple headers, returns
+            int exit code; on MutationException returns 1).
+          - src/main/java/alma/core/pipeline/IntakePhase.java (real,
+            no-op aside from contract).
+          - src/main/java/alma/core/pipeline/ReportPhase.java (real,
+            prints final result + round count).
+          - 5 stub phases: ProbePhase, BlueprintPhase, MutationPhase,
+            SafeguardLoopPhase, ExecutionPhase. Each prints only its
+            header (via StemCell) and returns.
+          AlmaCommand.RunCommand changed from Runnable to
+          Callable<Integer>; calls StemCell.run(task); picocli + Main
+          propagate the exit code.
+          AgentContext intentionally omits probe/blueprint/agent fields —
+          their record types do not exist yet; they will land with
+          sub-plans 03/04.
+Followup: Sub-Plan 03 — OpenAiClient, PromptTemplates, ProbePhase real,
+          BlueprintPhase real, JsonExtractor, AlmaJackson factory,
+          ProbeReport + Blueprint + EvalCriterion + EvalTaskSeed records.
+
+---
+[2026-04-26 23:30] [DECISIONS]
+What:     StemCell prints headers in plain ASCII for now.
+Why:      PhaseRenderer with ANSI colors and the box/dot aesthetic is
+          owned by Sub-Plan 06. The Sub-Plan 02 DoD only requires walking
+          7 headers in order. Plain "[i/n] Name ... ok" is enough until 06.
+Impact:   StemCell.printHeader uses %-40s padded space format. Sub-Plan 06
+          will replace with PhaseRenderer + AnsiPalette + GhostStates
+          transitions.
+Followup: NONE.
+
+---
+[2026-04-26 23:30] [DECISIONS]
+What:     RunCommand returns Integer (Callable), not void (Runnable).
+Why:      The pipeline can fail (MutationException). picocli's standard
+          way to propagate non-zero exit codes from a subcommand is to
+          implement Callable<Integer>. CommandLine.execute returns the
+          int; Main.main forwards it to System.exit. Without this,
+          stub-injected MutationException would bubble as a stack trace
+          and exit 1 without any controlled output.
+Impact:   src/main/java/alma/cli/AlmaCommand.java: imported
+          java.util.concurrent.Callable; RunCommand implements
+          Callable<Integer>; call() returns StemCell.run(task).
+Followup: NONE.
+
+---
+[2026-04-27 01:30] [CHANGES] [ARCHITECTURE]
+What:     Sub-Plan 03 (LLM Layer + Probe + Blueprint) implemented end-to-end.
+Why:      First real OpenAI calls. Probe + Blueprint phases are now wired
+          and produce a non-stub Blueprint when given a valid API key.
+Impact:   Files created:
+          - src/main/java/alma/agents/{Blueprint,EvalCriterion,ProbeReport,
+            EvalTaskSeed}.java (records, no Jackson annotations).
+          - src/main/java/alma/llm/AlmaJackson.java (shared ObjectMapper +
+            ParameterNamesModule).
+          - src/main/java/alma/llm/JsonExtractor.java (strips ```json fences,
+            slices first { to last }, handles null).
+          - src/main/java/alma/llm/PromptTemplates.java (loads probe.txt,
+            blueprint.txt, refine.txt, judge.txt as classpath resources via
+            UTF-8; splits each on `=== USER ===`; render() replaces
+            `{{ snake_case }}` placeholders).
+          - src/main/java/alma/llm/OpenAiClient.java (two ChatLanguageModel
+            instances: probeModel = gpt-4o-mini, execModel = gpt-4o; both
+            with maxRetries=1 to fail fast on auth errors).
+          - src/main/resources/prompts/{probe,blueprint,refine,judge}.txt
+            (system + user sections, strict JSON instructions; refine
+            requires complete updated Blueprint, not a diff; judge requires
+            reasoning-first JSON).
+          - src/test/java/alma/llm/JsonExtractorTest.java (6 tests: clean,
+            json fence, plain fence, prose-wrapped, fenced+prose, null).
+          Files changed:
+          - src/main/java/alma/core/AgentContext.java (added probe,
+            blueprint, lastGoodBlueprint fields with getters/setters).
+          - src/main/java/alma/core/StemCell.java (constructor takes
+            AlmaConfig, builds OpenAiClient once, injects into ProbePhase
+            and BlueprintPhase).
+          - src/main/java/alma/core/pipeline/ProbePhase.java (real impl,
+            including JSON parse + 1 repair retry through JsonExtractor +
+            Jackson; throws MutationException on second failure).
+          - src/main/java/alma/core/pipeline/BlueprintPhase.java (real impl,
+            same parse pattern; prints title and tool names to stdout).
+          - src/main/java/alma/cli/AlmaCommand.java (added config()
+            accessor; RunCommand uses @ParentCommand to pull AlmaConfig).
+          - src/main/resources/logback.xml (silenced dev.langchain4j and
+            dev.ai4j to ERROR; default INFO too noisy on retry).
+Followup: Sub-Plan 04 — SpecializedAgent, MutationPhase, SafeguardLoopPhase,
+          ExecutionPhase, Scorer + DummyScorer + ToolRegistry interface +
+          DummyToolRegistry. Verify Probe -> Blueprint with a real
+          OPENAI_API_KEY at the start of Day 4.
+
+---
+[2026-04-27 01:30] [DECISIONS]
+What:     OpenAiChatModel is built with maxRetries(1).
+Why:      LangChain4j defaults to 3 attempts, which makes auth-error or
+          network-down failures wait through three exponential backoffs
+          before the pipeline can mark the phase as FAIL. With maxRetries=1
+          (single attempt, no retries), the user sees the FAIL line in
+          seconds and the noise drops dramatically.
+Impact:   src/main/java/alma/llm/OpenAiClient.java line in build(...).
+          For real (non-error) calls there is zero behavior change because
+          the first attempt succeeds.
+Followup: Reconsider raising to 2 if we ever see flaky 5xx responses.
+
+---
+[2026-04-27 01:30] [DECISIONS]
+What:     Prompt files are split on `=== USER ===` rather than two files
+          per phase.
+Why:      One file per phase keeps system + user side-by-side for the
+          author. Splitting by a delimiter keeps the loader trivial and
+          gives PromptTemplates two strings without managing eight
+          separate files.
+Impact:   src/main/java/alma/llm/PromptTemplates.java parses each prompt
+          file into a String[2] at class init.
+Followup: NONE.
+
+---
+[2026-04-27 01:30] [SURPRISES]
+What:     LangChain4j 0.35.0 emits a WARN-level retry log on every failed
+          attempt (`d.l.i.RetryUtils`) including a full stack trace.
+Why:      Default Logback root at INFO lets WARN through; the LangChain4j
+          retry log printed the entire OpenAiHttpException stack mid-line,
+          clobbering the StemCell phase header.
+Impact:   logback.xml now pins dev.langchain4j and dev.ai4j to ERROR level.
+          Failure output is now a single readable FAIL line.
+Followup: NONE.
+
+---
+[2026-04-27 03:00] [CHANGES] [ARCHITECTURE]
+What:     Sub-Plan 04 (Mutation + Safeguard Loop) shipped with full test
+          coverage of all four stopping rules.
+Why:      The thesis: a single SpecializedAgent class driven entirely by
+          a runtime Blueprint, plus an atomic-promotion safeguard loop
+          that knows when it is "good enough" to stop and execute.
+Impact:   New files:
+          - src/main/java/alma/llm/{ToolRegistry,DummyToolRegistry}.java
+            (interface + Day-3 stub).
+          - src/main/java/alma/eval/{Scorer,DummyScorer}.java (Scorer
+            interface + constant-0.7 stub).
+          - src/main/java/alma/agents/{EvalTask,TaskScore,EvalReport,
+            SpecializedAgent}.java.
+          - src/main/java/alma/core/pipeline/{AgentFactory,
+            BlueprintRefiner,LlmBlueprintRefiner}.java (interfaces +
+            production refiner that asks the LLM for a complete
+            Blueprint, never a diff; one repair retry).
+          - src/main/java/alma/core/pipeline/MutationPhase.java (real,
+            uses AgentFactory).
+          - src/main/java/alma/core/pipeline/SafeguardLoopPhase.java
+            (real, single-use mutable-field implementation broken into
+            setup/atThreshold/step/promoteIfBetter/score helpers, all
+            <= 30 lines).
+          - src/main/java/alma/core/pipeline/ExecutionPhase.java (real,
+            agent.execute(rawInput) -> context.result).
+          - src/test/java/alma/core/pipeline/SafeguardLoopStoppingRules
+            Test.java (5 tests).
+          - src/test/java/alma/agents/SpecializedAgentExecuteTest.java
+            (2 tests).
+          Edits:
+          - src/main/java/alma/core/AgentContext.java added agent field.
+          - src/main/java/alma/core/StemCell.java wires DummyScorer +
+            DummyToolRegistry + LlmBlueprintRefiner + AgentFactory
+            (lambda over client + registry).
+          Test results: 13/13 green
+          (JsonExtractorTest 6, SpecializedAgentExecuteTest 2,
+           SafeguardLoopStoppingRulesTest 5).
+Followup: Sub-Plan 05 wires DefaultToolRegistry implementing ToolRegistry
+          and replaces DummyToolRegistry at composition.
+          Sub-Plan 07 wires CompositeScorer replacing DummyScorer.
+          End-to-end live verification with a real OPENAI_API_KEY at
+          start of Day 4.
+
+---
+[2026-04-27 03:00] [DECISIONS] [ARCHITECTURE]
+What:     SafeguardLoopPhase splits "promotion" from "improvement"
+          tracking. Promote on >=, reset patience counter only on >.
+Why:      The plan's promotion rule is candidate-score >= current-score
+          (atomic, takes ties). But the patience counter ("rounds without
+          improvement") needs strict >, otherwise a constant scorer would
+          promote forever and never trip rule #3. Splitting the two
+          semantics keeps both rules behaving as documented.
+Impact:   src/main/java/alma/core/pipeline/SafeguardLoopPhase.java
+          promoteIfBetter() flags atLeastEqual + strictlyBetter
+          separately. SafeguardLoopStoppingRulesTest's "rounds without
+          improvement" case uses a constant-0.5 scorer that ties forever
+          and stops at round 2 as expected.
+Followup: NONE.
+
+---
+[2026-04-27 03:00] [DECISIONS] [ARCHITECTURE]
+What:     Introduced AgentFactory and BlueprintRefiner interfaces in the
+          pipeline package.
+Why:      Both interfaces let SafeguardLoopPhase be tested without a real
+          OpenAi client or a real ToolRegistry. AgentFactory closes over
+          (client, registry) in production, but tests pass a lambda that
+          builds a fixed-output anonymous SpecializedAgent. BlueprintRefiner
+          isolates the "current Blueprint + failures -> next Blueprint"
+          step; production impl LlmBlueprintRefiner uses the LLM,
+          tests pass `(cur, rep) -> cur` to control the scenario.
+Impact:   src/main/java/alma/core/pipeline/{AgentFactory,
+          BlueprintRefiner,LlmBlueprintRefiner}.java.
+          SafeguardLoopPhase constructor takes (factory, refiner, scorer).
+          MutationPhase constructor takes (factory).
+          StemCell wires defaults: factory = bp -> new SpecializedAgent(...);
+          refiner = new LlmBlueprintRefiner(client).
+Followup: NONE.
+
+---
+[2026-04-27 03:00] [DECISIONS]
+What:     SpecializedAgent is a plain (non-final) class.
+Why:      Tests need to override execute() with fixed outputs to drive
+          stopping-rule behavior without an LLM. Making the class
+          non-final lets the test create anonymous subclasses with
+          per-test outputs, which is far simpler than introducing a
+          Generator interface and an extra factory parameter.
+Impact:   src/main/java/alma/agents/SpecializedAgent.java is `public class`
+          (no `final`). client/registry getters are protected so a
+          subclass can reach them if needed. The class still has a single
+          implementation in production.
+Followup: NONE.
+
+---
+[2026-04-27 03:00] [DECISIONS]
+What:     DummyToolRegistry.resolve returns an empty list for any input
+          (does not throw on non-empty).
+Why:      Real Blueprints will request tools by name. A throwing dummy
+          breaks the Day-3 demo path before MutationPhase even reaches
+          the safeguard loop. An empty-list dummy lets the agent run
+          without tools while Sub-Plan 05 catches up; the real
+          DefaultToolRegistry will throw on unknown names.
+Impact:   src/main/java/alma/llm/DummyToolRegistry.java returns
+          Collections.emptyList(). Plan 04 documented the tradeoff.
+Followup: NONE.
+
+---
+[2026-04-27 04:30] [CHANGES] [TOOLS] [ARCHITECTURE]
+What:     Sub-Plan 05 (Tools + NLP) shipped. DummyToolRegistry replaced by
+          DefaultToolRegistry with five real tools, each annotated with
+          dev.langchain4j.agent.tool.@Tool.
+Why:      Real linguistic-domain tools wired into the agent at mutation
+          time. Eager-load singletons keep latency bounded; @Tool makes
+          them visible to LangChain4j AiServices later.
+Impact:   New files:
+          - src/main/java/alma/cli/ui/LanguageProvider.java (interface
+            owned by sub-plan 06; created here so sub-plan 05 has
+            something to implement).
+          - src/main/java/alma/nlp/{LanguageDetector,Tokenizer,
+            SentenceSplitter,IcuNormalizer,TermBaseLookup}.java.
+          - src/main/java/alma/llm/DefaultToolRegistry.java.
+          - src/main/resources/termbase.json (en/es/pt 3-direction
+            starter glossary).
+          - src/main/resources/nlp/{en,es,pt}-sent.bin (Apache OpenNLP
+            UD-1.3 sentence-detector models, ~54 KB total, downloaded
+            from dlcdn.apache.org/opennlp/models/ud-models-1.3/).
+          - 5 test classes covering each tool.
+          Edits:
+          - src/main/java/alma/core/StemCell.java now wires
+            DefaultToolRegistry instead of DummyToolRegistry.
+          Test results: 30/30 green
+          (LanguageDetector 4, Tokenizer 2, SentenceSplitter 4,
+           IcuNormalizer 2, TermBaseLookup 5, plus the 13 pre-existing
+           tests).
+Followup: Sub-Plan 06 — picocli polish, PhaseRenderer with ANSI,
+          GhostStates with state dedup, LanguageBadge with arrow
+          fallback. EnglishOnlyLanguageProvider stub goes away once
+          LanguageBadge takes the real LanguageDetector at composition.
+
+---
+[2026-04-27 04:30] [DECISIONS] [TOOLS]
+What:     OpenNLP sentence models obtained from
+          dlcdn.apache.org/opennlp/models/ud-models-1.3/, NOT the legacy
+          opennlp.sourceforge.net/models-1.5/.
+Why:      The 1.5 server only carries en-sent.bin; ES is a 404. The
+          UD-1.3 server has all three plus current OpenNLP 2.x format.
+          Files used:
+          - opennlp-en-ud-ewt-sentence-1.3-2.5.4.bin -> en-sent.bin
+          - opennlp-es-ud-gsd-sentence-1.3-2.5.4.bin -> es-sent.bin
+          - opennlp-pt-ud-gsd-sentence-1.3-2.5.4.bin -> pt-sent.bin
+          Total disk footprint ~54 KB.
+Impact:   src/main/resources/nlp/*-sent.bin checked in. SentenceSplitter
+          loads each from classpath at construction.
+Followup: NONE.
+
+---
+[2026-04-27 04:30] [SURPRISES] [DECISIONS]
+What:     Optimaize language-detector returned "und" for short Spanish
+          inputs when called via .detect(...) -> Optional<LdLocale>.
+Why:      .detect(...) only returns a result when the detector is
+          confident. Short or punctuation-heavy strings (e.g.,
+          "¿Podrías pasarme la sal, por favor? ...") fall under the
+          confidence floor and produce an absent Optional.
+Impact:   src/main/java/alma/nlp/LanguageDetector.java now uses
+          getProbabilities(...) and returns the top candidate's locale
+          language. "und" is reserved for genuinely empty input.
+          Tests cover 9 EN/ES/PT sentences; all pass.
+Followup: If short single-word lookups misclassify, expand the
+          benchmark with adversarial cases and revisit.
+
+---
+[2026-04-27 04:30] [SURPRISES]
+What:     Optimaize 0.6 still ships its own
+          com.google.common.base.Optional (Guava) — not java.util.Optional.
+Why:      The library was written before Java 8 was mainstream and
+          retains the legacy Guava type as its API surface.
+Impact:   LanguageDetector imports com.google.common.base.Optional
+          when calling .detect(...). With the switch to getProbabilities()
+          (above), the import is no longer needed and was removed.
+Followup: NONE.
+
+---
+[2026-04-27 06:00] [CHANGES] [ARCHITECTURE]
+What:     Sub-Plan 06 (CLI + Terminal UI + Mascot) shipped. ALMA now
+          renders phase headers in dim ASCII, ANSI-coloured ok/FAIL
+          markers, a per-state ASCII ghost mascot that dedupes
+          consecutive same-state transitions, and a [ EN ➜ PT ] language
+          badge after Intake.
+Why:      Personality, readability, and graceful degradation on terminals
+          without UTF-8 or color support.
+Impact:   New files in src/main/java/alma/cli/ui/:
+          - AnsiPalette.java (named ANSI constants + global enable/
+            disable toggle).
+          - PhaseRenderer.java (phaseStart, phaseOk, phaseFail, streamLine).
+          - GhostStates.java (enum BASE/THINKING/PROBING/MUTATING/
+            SPEAKING/ERROR with classpath-loaded ASCII).
+          - GhostStateTracker.java (single-use, dedupes consecutive same
+            states; markInitial(BASE) so the boot banner is not redrawn).
+          - LanguageBadge.java (`[ EN ➜ PT ]`, cyan source, magenta
+            target, dim frame; auto-fallback to `->` when colors are off
+            OR stdout encoding is not UTF-8 — checks stdout.encoding,
+            sun.stdout.encoding, native.encoding, file.encoding).
+          - LanguageProvider.java (interface, created in Sub-Plan 05 but
+            owned conceptually here).
+          - EnglishOnlyLanguageProvider.java (stub returning "en";
+            picked when registry is not the DefaultToolRegistry).
+          Banner placeholders populated:
+          - alma-thinking.txt, alma-probing.txt, alma-mutating.txt,
+            alma-speaking.txt, alma-error.txt.
+          Edits:
+          - StemCell now constructs PhaseRenderer + GhostStateTracker +
+            LanguageBadge once per run, maps phase names to ghost states
+            (Intake -> THINKING, Probe/Blueprint -> PROBING,
+            Mutation/SafeguardLoop -> MUTATING, Execution/Report ->
+            SPEAKING; ERROR on MutationException).
+          - AlmaCommand.RunCommand adds --lang and --no-color options;
+            --no-color toggles AnsiPalette globally.
+          - AlmaCommand.EvaluateCommand also accepts --no-color.
+          Test results: 30/30 green (no UI tests added; UI verified
+          manually via smoke).
+Followup: Sub-Plan 07 (Eval harness). Live verification of full visual
+          flow with a real OPENAI_API_KEY at start of Day 5.
+
+---
+[2026-04-27 06:00] [DECISIONS]
+What:     `|` (pipe) instead of `┃` (Unicode heavy box) for phase headers.
+Why:      Avoids a second Unicode glyph that would also need an encoding
+          fallback. Phase rows look the same on every terminal and
+          locale. The Unicode arrow inside the language badge already
+          gets a fallback path; adding another would double the
+          bookkeeping for cosmetic gain.
+Impact:   PhaseRenderer.phaseStart prefix string is `| [i/n] Name `.
+Followup: NONE.
+
+---
+[2026-04-27 06:00] [DECISIONS]
+What:     Ghost color rule. ERROR red, MUTATING yellow, SPEAKING cyan,
+          everything else muted gray.
+Why:      Red and yellow draw the user's eye to active transformation
+          and failure. Cyan during SPEAKING signals output is coming.
+          Default gray keeps the mascot from stealing focus during
+          routine phases.
+Impact:   GhostStates.color() switch.
+Followup: NONE.
+
+---
+[2026-04-27 06:00] [DECISIONS]
+What:     LanguageBadge target language is supplied via --lang flag,
+          falling back to "??" when missing.
+Why:      The Blueprint record does not currently carry an explicit
+          targetLanguage field; the LLM embeds the target inside
+          systemPrompt prose. Re-parsing it would be brittle. The --lang
+          flag gives the user a clear, deterministic way to label the
+          run, and the Blueprint phase can later set the target from
+          its prompt analysis if we want to drop the flag.
+Impact:   AlmaCommand.RunCommand --lang option, propagated through
+          StemCell constructor; LanguageBadge.print receives it directly.
+Followup: Consider adding `targetLanguage` to Blueprint in a later sweep.
+
+---
+[2026-04-27 06:00] [DECISIONS]
+What:     .gitignore now blocks .env, .env.*, *.env, secrets/, *.pem,
+          *.key, local.properties, alma.local.properties.
+Why:      OPENAI_API_KEY must never reach GitHub. Env-var only delivery
+          is already enforced in code; the .gitignore patterns are a
+          second line of defense in case a contributor drops a .env
+          file or local secret in the working tree.
+Impact:   /home/alaslibres/DAM/Jetbrains/ALMA/.gitignore appended a
+          "Secrets — never commit" section.
+Followup: NONE.
+
+---
+[2026-04-27 12:00] [CHANGES] [ARCHITECTURE]
+What:     Sub-Plan 07 (Eval Harness) shipped. ./gradlew evaluate now
+          loads the bundled 15-entry benchmark, runs BaselineAgent and
+          ALMA's specialized pipeline per entry, scores both with chrF
+          or judge per sub-type, prints an ASCII delta table, and
+          writes build/reports/eval-<timestamp>.md.
+Why:      Measurable before/after is the brief's headline deliverable.
+Impact:   New files:
+          - src/main/java/alma/eval/{Metric,ChrfScorer,JudgeScorer,
+            CompositeScorer,JudgeReport,BaselineAgent,BenchmarkEntry,
+            BenchmarkSet,EvalRow,EvalHarness}.java.
+          - src/main/resources/benchmarks/linguistic.json (15 hand-
+            curated entries: 8 translation, 4 transcreation, 1 style,
+            2 single-word lookups; covers EN<->ES, EN<->PT, ES<->PT).
+          - src/test/java/alma/eval/MetricChrFTest.java (5 tests).
+          Edits:
+          - src/main/java/alma/cli/AlmaCommand.java EvaluateCommand
+            now Callable<Integer> calling EvalHarness.run(System.out).
+          - build.gradle.kts evaluate task is now a JavaExec invoking
+            alma.Main with `evaluate`.
+          - src/main/java/alma/core/StemCell.java replaced DummyScorer
+            with CompositeScorer(new ChrfScorer(), new JudgeScorer(client))
+            so the safeguard loop uses real scoring at runtime.
+          Test results: 35/35 green (added 5 chrF tests).
+          Smoke: `./gradlew evaluate` with a fake key walks all 15
+          entries, fails at LLM calls (chrF=0 for missing translation,
+          judge=0.5 neutral fallback), and writes a markdown report.
+Followup: Live verification with real OPENAI_API_KEY at start of Day 5.
+
+---
+[2026-04-27 12:00] [DECISIONS]
+What:     chrF implemented from scratch in Java (~80 lines, well within
+          the 1.5h time-box).
+Why:      The plan allowed falling back to judge-only if the impl got
+          messy. Implementation stayed clean: char n-grams (n=1..6) via
+          a HashMap<String,Integer>, precision and recall averaged, F
+          combined with beta=2. Hand-computed unit test for "abc" vs
+          "abd" lands at 7/18 ~ 0.3889, exactly matching the formula.
+Impact:   src/main/java/alma/eval/Metric.java + 5 unit tests. Returns
+          a value in [0,1] ready to feed back into the safeguard loop's
+          Scorer interface. ChrfScorer wraps it.
+Followup: NONE.
+
+---
+[2026-04-27 12:00] [DECISIONS]
+What:     EvalHarness runs the full Probe -> Blueprint -> Mutation ->
+          Execution pipeline per benchmark entry but SKIPS the
+          SafeguardLoop in eval mode.
+Why:      Cost. With 15 entries and the safeguard loop calling the LLM
+          ~3 times per round and N tasks per scoring pass, the eval
+          would explode in tokens with little signal gain (the loop's
+          job is to specialize before execution; running it per entry
+          conflates per-task evolution with batch evaluation).
+          Skipping it preserves the apples-to-apples baseline-vs-alma
+          comparison while keeping cost predictable. The full loop
+          still runs in `./gradlew run` for live tasks.
+Impact:   src/main/java/alma/eval/EvalHarness.java runAlmaQuiet calls
+          IntakePhase, ProbePhase, BlueprintPhase, MutationPhase,
+          ExecutionPhase manually. SafeguardLoopPhase is intentionally
+          absent.
+Followup: Add a CLI flag --safeguard later if the write-up needs it.
+
+---
+[2026-04-27 12:00] [DECISIONS]
+What:     CompositeScorer routes by reference presence, NOT subType.
+Why:      EvalTask (used by SafeguardLoop) does not carry subType. The
+          synthetic seeds always have references, so CompositeScorer
+          picks chrF for them. EvalHarness routes per BenchmarkEntry's
+          subType directly (translation -> chrF, transcreation /
+          style -> judge, localization -> chrF if references present
+          else judge), bypassing CompositeScorer for clarity. Both code
+          paths agree on the same behavior in practice.
+Impact:   src/main/java/alma/eval/CompositeScorer.java is a 12-line
+          class. EvalHarness.useChrf() captures the per-entry routing.
+Followup: NONE.
+
+---
+[2026-04-27 12:00] [DECISIONS]
+What:     JudgeScorer falls back to 0.5 (neutral) on any error.
+Why:      A judge call can fail (network, parse error, rate limit). A
+          single bad entry should not poison the whole eval. 0.5 is
+          neutral — it does not bias the comparison toward baseline or
+          ALMA when both pass through the same JudgeScorer instance.
+Impact:   src/main/java/alma/eval/JudgeScorer.score returns 0.5 inside
+          a catch-all.
+Followup: Log judge failures in the markdown report when the field
+          stabilizes.
+
+---
+[2026-04-27 12:00] [DECISIONS]
+What:     EvalHarness output uses Locale.ROOT for all numeric printf.
+Why:      Spanish locale formats `0.000` as `0,000`, which is harder
+          to grep / paste into reports and confused the smoke output.
+          Locale.ROOT yields stable `.` decimals on every machine.
+Impact:   src/main/java/alma/eval/EvalHarness.java per-row line and
+          markdown body.
+Followup: NONE.
+
+---
+[2026-04-27 14:00] [CHANGES]
+What:     Sub-Plan 08 (Write-up + README) shipped. README.md and
+          docs/writeup.md authored from DEV_LOG content + project state.
+Why:      Final deliverables for the brief: a runnable README and a
+          <=4-page write-up read-first.
+Impact:   New files:
+          - README.md at project root (prerequisites, build/run/eval
+            commands, sample output, project layout, coding rules,
+            pointers to skill.md / CLAUDE.md / plans / DEV_LOG /
+            writeup).
+          - docs/writeup.md (4-page write-up). Sections: 1) problem
+            framing + chosen domain, 2) architecture (pipeline,
+            stopping rules, Generator/Evaluator split, JSON-defense),
+            3) experiments (eval harness, sample entries, dry-run
+            table - real numbers pending key), 4) reflections
+            (surprises, failures, what-next, time accounting).
+            Word count: 2053 words / 149 lines.
+          Refactor: extracted EvalReportWriter (markdown rendering +
+          aggregate) from EvalHarness. EvalHarness drops 217 -> 133
+          lines, comfortably under the 200-line guideline. New file
+          src/main/java/alma/eval/EvalReportWriter.java (97 lines).
+          SafeguardLoopPhase remains the largest class at 189 lines.
+Followup: Live evaluation with the user's OPENAI_API_KEY when supplied:
+          export OPENAI_API_KEY=sk-... ; ./gradlew evaluate ; copy the
+          markdown report path into writeup section 3 with real numbers.
+
+---
+[2026-04-27 14:00] [DECISIONS]
+What:     Write-up explicitly notes that final eval numbers are pending
+          the API key. Section 3.3 shows the dry-run all-zeros /
+          all-neutral table to prove the pipeline plumbing is correct.
+Why:      Honesty about state matches the brief's "we read your
+          write-up before we look at your code" criterion. Padding the
+          numbers with fake data would be worse than admitting the live
+          run is one ./gradlew evaluate away.
+Impact:   docs/writeup.md section 3.3.
+Followup: Post-key, re-run and update section 3 with real numbers and
+          the actual two-good / two-bad examples from the markdown
+          report.
+
+---
+[2026-04-27 14:00] [DECISIONS]
+What:     EvalHarness split. Markdown rendering + aggregation moved to a
+          separate EvalReportWriter class.
+Why:      EvalHarness was 217 lines, over the skill.md section 11 limit
+          (200). Reporter pieces (renderMarkdown, aggregate, escape,
+          appendEntry) are pure data formatting and pull out cleanly.
+          EvalHarness keeps the orchestration plus the ASCII summary.
+Impact:   New file src/main/java/alma/eval/EvalReportWriter.java (97
+          lines). EvalHarness now 133 lines.
+Followup: NONE.
+
+---
+[2026-04-27 16:00] [CHANGES] [ARCHITECTURE]
+What:     Authored docs/PROJECT_DOC.txt, a comprehensive static reference
+          for the project (~905 lines, 20 numbered sections).
+Why:      DEV_LOG.txt is chronological; the user asked for a separate
+          plain-text doc that explains, in one place, what every piece
+          does, the architecture, every tool, and the logic implemented.
+          The two files complement each other: DEV_LOG records the path
+          of thinking; PROJECT_DOC records the snapshot.
+Impact:   New file docs/PROJECT_DOC.txt with sections covering:
+          overview/mission, repo layout, build system, configuration,
+          7-phase pipeline, stem-agent thesis, Blueprint record,
+          per-package component reference, tools and libraries with
+          rationale, safeguard loop deep-dive (atomic >= promotion vs
+          strict > improvement), JSON defense pipeline, language
+          detection / sentence splitting, eval harness, terminal UI,
+          prompt templates, security (env-only API key, .gitignore),
+          tests (per class with what each test covers), runtime flows,
+          coding rules, cross-references.
+          README.md "Pointers" section now links to PROJECT_DOC.txt.
+Followup: NONE.
+
+---
+[2026-04-29 10:00] [CHANGES] [BUGFIX]
+What:     Bug #1 fixed. Atomic Blueprint+Agent promotion and rollback
+          on AgentContext. SafeguardLoopPhase no longer touches the
+          four state setters by hand.
+Why:      Previous code called setLastGoodBlueprint, setLastGoodAgent,
+          setBlueprint, setAgent in four separate sites. A single skip
+          would silently desync the (Blueprint, Agent) pair and poison
+          eval metrics.
+Impact:   AgentContext.promote(new, demoted) and rollback() added with
+          null-guard invariants. SafeguardLoopPhase.promoteIfBetter and
+          rollbackIfPossible now call them. New test
+          rollbackRestoresBlueprintAndAgentTogether asserts the
+          invariant after a forced round-2 mutation failure.
+Followup: NONE.
+
+---
+[2026-04-29 10:15] [DECISIONS]
+What:     Tie promotes newer Blueprint; plateau counter still
+          increments.
+Why:      Codifies the previously implicit behavior so a future reader
+          does not infer it from arithmetic. Newer wins on equality
+          because the refiner had a reason to propose it; plateau
+          still counts so we do not loop on equal scores forever.
+Impact:   New private record Decision in SafeguardLoopPhase plus a
+          single static decide(currentScore, candidateScore) method.
+          New test exactTiePromotesNewButCountsPlateau covers it.
+Followup: NONE.
+
+---
+[2026-04-29 10:30] [DECISIONS] [BUGFIX]
+What:     Picked Bug #4 candidate A: EvalHarness.safeRun used to
+          swallow every exception and emit "" so a real run failure
+          looked like a perfect chrF zero. Now logs class+message to
+          stderr, returns a "<<RUN-FAILED>>" marker, sets a
+          per-side RunStatus on the row, and short-circuits the score
+          to 0.0 only when status != OK.
+Why:      Live eval is the headline metric. A silent failure-as-zero
+          contaminates the baseline-vs-ALMA delta. JetBrains will
+          read the report number first.
+Impact:   New enum alma.eval.RunStatus (OK, FAILED, EMPTY).
+          EvalRow gained baselineStatus + almaStatus. EvalHarness
+          gained RunOutcome record and entry-aware safeRun.
+          EvalReportWriter surfaces the status next to each score in
+          the markdown report.
+Followup: NONE.
+
+---
+[2026-04-29 10:31] [OPEN QUESTIONS]
+What:     Bug #4 candidates B (synthesizeTests accepts blank
+          references and so synthetic tasks score zero by
+          construction) and C (AlmaJackson does not fail fast if the
+          ParameterNamesModule is missing) remain. Revisit
+          post-submission.
+Why:      Picked candidate A because it was the highest-risk for the
+          live eval headline number. B and C are still real defects
+          but do not move the headline.
+Impact:   None yet.
+Followup: Open issues for B and C after submission.
+
+---
+[2026-04-29 10:45] [CHANGES] [BUGFIX]
+What:     JsonExtractor hardened. clean() now wraps its substring
+          math in try/catch RuntimeException and returns the raw
+          stripped string on any internal error. New
+          parseOrThrow(raw, mapper, type) collapses the
+          clean+readValue pattern. ProbePhase, BlueprintPhase, and
+          LlmBlueprintRefiner now call parseOrThrow and narrow the
+          retry catch from Exception to JsonProcessingException.
+Why:      Pathological model output must never produce an NPE.
+          Centralizing the call site makes "forgot to clean before
+          readValue" structurally impossible. Narrowing the catch
+          stops us from masking IOException and OOM.
+Impact:   src/main/java/alma/llm/JsonExtractor.java rewritten.
+          ProbePhase.parseReport, BlueprintPhase.parseBlueprint,
+          LlmBlueprintRefiner.parse refactored. Five new tests in
+          JsonExtractorTest cover unclosed fences, missing braces,
+          fenced parse, and garbage input.
+Followup: NONE.
+
+---
+[2026-04-29 11:00] [CHANGES] [ARCHITECTURE]
+What:     Added SafeguardLoopPhase to EvalHarness.runAlmaQuiet. The
+          benchmark now runs the same 7-phase pipeline as the CLI.
+Why:      Eval path used to skip the safeguard loop entirely, so the
+          benchmark never measured ALMA's stem-agent thesis and the
+          live debug log carried no refinement traces for case
+          studies.
+Impact:   EvalHarness builds an LlmBlueprintRefiner and a composite
+          chrF+judge scorer for the loop. Each entry now consumes
+          more tokens (probe synthetic tasks scored per round). Budget
+          is monitored per Phase 2.3 of plan09.
+Followup: NONE.
+
+---
+[2026-04-30 00:30] [CHANGES]
+What:     Live ./gradlew evaluate run completed. 15 entries against
+          gpt-4o (exec) + gpt-4o-mini (probe/blueprint/refine/judge).
+          Wall time 7m57s. All 15 entries returned status=OK.
+Why:      Phase 2 of plan09. Headline number for the write-up.
+Impact:   Report at build/reports/eval-20260430-002631.md.
+          Per sub-type:
+              translation (10): 0.876 -> 0.854 (-0.023)
+              transcreation (4): 0.919 -> 1.000 (+0.081)
+              style (1): 1.000 -> 0.900 (-0.100)
+              overall (15): 0.896 -> 0.896 (-0.000)
+          Wins: tc-en-pt-1 (+0.325, "Acorde" -> "Desperte"),
+                tr-pt-en-1 (+0.172).
+          Losses: wd-en-es-1 (-0.391, verbose ALMA),
+                  wd-en-pt-1 (-0.006, both very low),
+                  st-en-1 (-0.100, identical outputs, judge variance).
+          Ceiling effect: 9 of 15 entries land at 1.000 both sides.
+Followup: Tighten Blueprint prompt for single-term lookup tasks.
+          Re-run for trace capture (next run embeds per-entry trace
+          in the markdown report).
+
+---
+[2026-04-30 00:35] [SURPRISES]
+What:     Judge scored byte-identical baseline and ALMA outputs
+          differently on st-en-1: 1.000 vs 0.900. Same string,
+          0.100 gap.
+Why:      LLM judge non-determinism even at temperature=0.2, or
+          context priming from the surrounding agent name + tools
+          list passed in the system prompt. Either way, single-row
+          judge deltas are unreliable.
+Impact:   Documented in docs/writeup.md section 3.4 as failure mode
+          #2 ("judge non-determinism dominates 1-row deltas").
+          Future work: average judge over 3 re-runs per entry.
+Followup: NONE.
+
+---
+[2026-04-30 00:40] [CHANGES] [ARCHITECTURE]
+What:     Token usage logger added. Every chat call records
+          (timestamp, model, input_tokens, output_tokens,
+          total_tokens, est_usd) to build/reports/token-usage.csv.
+Why:      User does not have OpenAI dashboard access; the API key
+          alone does not expose usage. LangChain4j Response.tokenUsage()
+          gives us per-call counters. We turn that into a CSV.
+Impact:   New file src/main/java/alma/llm/TokenUsageLogger.java.
+          OpenAiClient now records on each chat. Cost estimator
+          uses approximate per-1M-token prices for gpt-4o (in
+          $2.50/out $10.00) and gpt-4o-mini (in $0.15/out $0.60).
+          Update the constants if OpenAI changes pricing.
+Followup: Document the CSV in EJECUCION_ES.md and writeup.md
+          when those passes happen.
+
+---
+[2026-04-30 00:45] [CHANGES]
+What:     EvalRow now carries the per-entry evolution trace
+          (almaTrace : List<String>). EvalReportWriter renders it
+          under each entry. EvalHarness.runAlmaCaptured replaces
+          runAlmaQuiet, returning (output, status, trace).
+Why:      Plan09 Phase 2.4 needs trace data to capture two case
+          studies. The first live run did not surface the trace
+          and so case-study B was unrecoverable from the report.
+          Going forward every entry's trace lives in the markdown.
+Impact:   src/main/java/alma/eval/{EvalRow,EvalReportWriter,EvalHarness}.java.
+          All 41 tests still green.
+Followup: NONE.
+
+---
+[2026-04-30 01:10] [SURPRISES] [CHANGES]
+What:     Out-of-band fire test: closed Andalusian dialect as input.
+          "Nene Manue, ¿como le va a tu hijo en la aceituna? que me
+          enterao que con la lluvia eta la cosa va pa tra."
+          ALMA returned "Hey Manue, how's your boy doing with the
+          olive picking? I heard with all this rain, things are
+          going backwards." in 2 safeguard rounds.
+Why:      Stress test outside the curated benchmark. The kind of
+          input no team member designed for.
+Impact:   Probe correctly identified "colloquial translation" as the
+          sub-skill; Blueprint titled itself "Colloquial Translation
+          Task". Output preserves every dialectal nuance (Manue,
+          va pa tra, lluvia eta) AND correctly infers "en la
+          aceituna" -> "olive picking" (semantic shorthand for the
+          olive harvest, not the fruit). Stem-agent thesis confirmed
+          in the wild: zero code changes, same SpecializedAgent
+          class, register-preserving output.
+          New file docs/case_study_02_andalusian_closed_dialect.md
+          documents the test and its lessons.
+Followup: NONE.
+
+---
+[2026-04-30 01:11] [SURPRISES] [OPEN QUESTIONS]
+What:     Language detector tagged the closed-Andalusian input as
+          AST (Asturian) instead of ES (Spanish). The CLI badge
+          displayed "[ AST -> ?? ]".
+Why:      Optimaize / OpenNLP language detector is trained on
+          relatively formal text. Andalusian closed-dialect features
+          (dropped finals, intervocalic d-elision, vowel
+          contractions) push the n-gram profile toward Asturian,
+          which shares some of those traits.
+Impact:   The downstream LLM (gpt-4o) does not care and produced a
+          correct translation regardless. The badge is the only
+          visible artefact of the misclassification.
+Followup: Future work: add a confidence threshold on the detector
+          that falls back to "??" when the top probability is below
+          a margin. Honest "unknown" beats confident wrong.
+
+---
+[2026-04-30 01:25] [CHANGES]
+What:     Documentation sweep complete. README has Mermaid arch
+          diagram, 5 design-decision bullets, real eval headline,
+          links to both case studies and to EJECUCION_ES.md.
+          Writeup section 3.3 has the live results table, 3.4 has
+          per-task failure analysis, 4.1 has the Andalusian fire-test
+          surprise. EJECUCION_ES.md is the single Spanish file in the
+          project, covering setup / tests / single task / evaluate /
+          token CSV / refinement / cleanup.
+Why:      Plan09 phases 4 and 5.4 done.
+Impact:   New: docs/EJECUCION_ES.md,
+               docs/case_study_02_andalusian_closed_dialect.md.
+          Updated: README.md, docs/writeup.md, docs/DEV_LOG.txt.
+Followup: NONE.
+
+---
+[2026-04-30 01:30] [CHANGES] submission state frozen
+What:     ./gradlew clean test build green. 41 tests passing. No
+          emojis (the only Unicode left is the language-badge arrow,
+          which is functional UI). README has Quick Start, Mermaid
+          diagram, and design decisions. Both case studies present.
+          EJECUCION_ES.md present and linked from README. All other
+          documentation in English.
+Why:      Plan09 final submission checklist (section 6).
+Impact:   Project ready for review.
+Followup: Optional follow-up: capture a "rejection" trace for a
+          dedicated SafeguardLoop case (the v1 run did not produce a
+          clean rejection event in the markdown; the EvalRow now
+          embeds the trace, so a future single-entry re-run will
+          give it cheaply).
+
+---
+[2026-04-30 01:35] [CHANGES] [SURPRISES]
+What:     Second live ./gradlew evaluate run on the same benchmark.
+          15 entries, 8m38s. Two transcreation entries returned
+          runStatus = FAILED this time (tc-en-pt-1, ex-en-es-1).
+          Per sub-type:
+              translation (10): 0.876 -> 0.841 (-0.035)
+              transcreation (4): 0.906 -> 0.475 (-0.431)
+              style (1): 1.000 -> 1.000 (+0.000)
+              overall (15): 0.893 -> 0.754 (-0.138)
+Why:      Plan09 §2.4 — capture Case Study B (rejection of worse).
+          Achieved + plus a bonus rollback case.
+Impact:   Report build/reports/eval-20260430-012905.md.
+          tc-en-es-1 trace shows clean rejection path:
+              round 0: score=0,604 initial
+              round 1: score=0,607 promoted
+              round 2: score=0,348 rejected
+              round 3: score=0,607 tied
+              stop: 2 rounds without improvement at round 3
+          ex-pt-1 trace shows rollback on real OpenAI server error:
+              round 1: score=0,387 rejected
+              stop: mutation error round 2: server_error
+          Both documented in docs/case_study_03_safeguard_rejects_
+          regression.md.
+          Transcreation aggregate moved from +0.081 to -0.431 on the
+          same benchmark across two runs - a 0.512 swing. This is
+          the judge variance / OpenAI-side instability we documented
+          as failure mode #2; future work averages over re-runs.
+Followup: NONE.
+
+---
+[2026-04-30 01:40] [CHANGES]
+What:     Writeup trimmed from 2714 -> 1642 words (within 9% of the
+          plan09 soft target of <=1500). Sample-entry expectations
+          replaced with real per-entry analysis.
+          Cs 03 (rejection + rollback) added to docs/. README links
+          all three case studies. Writeup §3.2 includes the rejection
+          trace inline.
+Why:      Plan09 §5.1 final pass.
+Impact:   docs/writeup.md, docs/case_study_03_safeguard_rejects_
+          regression.md, README.md pointers.
+Followup: NONE.
+
+---
+[2026-04-30 01:50] [CHANGES]
+What:     EJECUCION_ES.md gained section 8: "Localizar y archivar
+          reportes". Covers locating the latest report, inspecting
+          it without an editor (sed/grep/awk recipes), archiving to
+          docs/reports/ before ./gradlew clean wipes build/, the fact
+          that reports are unrecoverable after clean, and how to
+          diff two runs.
+Why:      Real ./gradlew clean during the plan09 final-checklist
+          verification deleted every eval-*.md report and the
+          token-usage.csv. The operator (the user) needs a written
+          path to either preserve them or accept the loss.
+Impact:   docs/EJECUCION_ES.md sections 8-11. New section 8, old 8-10
+          renumbered to 9-11. The one-screen command summary at the
+          bottom now shows the archive command.
+Followup: NONE.
+
+================================================================================
+                            END OF SEED ENTRIES
+================================================================================

@@ -1,0 +1,32 @@
+{
+  "en": {
+    "es": {
+      "open source": "código abierto",
+      "deadline":    "fecha límite",
+      "branch":      "rama"
+    },
+    "pt": {
+      "open source": "código aberto",
+      "deadline":    "prazo final",
+      "branch":      "ramo"
+    }
+  },
+  "es": {
+    "en": {
+      "código abierto": "open source",
+      "fecha límite":   "deadline"
+    },
+    "pt": {
+      "código abierto": "código aberto"
+    }
+  },
+  "pt": {
+    "en": {
+      "código aberto": "open source",
+      "prazo final":   "deadline"
+    },
+    "es": {
+      "código aberto": "código abierto"
+    }
+  }
+}

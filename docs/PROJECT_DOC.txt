@@ -1,0 +1,905 @@
+================================================================================
+                          ALMA - PROJECT DOCUMENTATION
+                       Adaptive Linguistic Metamorphosis Agent
+================================================================================
+Purpose : Comprehensive reference. What every piece does, why it exists, how
+          it fits together. Companion to docs/DEV_LOG.txt (chronological log)
+          and docs/writeup.md (4-page narrative).
+Authors : jandroman23@gmail.com (with assistant pair-programmer).
+Updated : 2026-04-27.
+Audience: A Java beginner reading every file. Plain English; plain text.
+
+================================================================================
+                              TABLE OF CONTENTS
+================================================================================
+01. Overview and mission
+02. Repository layout (full tree)
+03. Build system (Gradle, Java target, secrets)
+04. Configuration and environment
+05. Architecture: the seven-phase pipeline
+06. The stem-agent thesis
+07. The Blueprint (runtime configuration)
+08. Component reference -- package by package
+09. Tools, libraries, and why each one
+10. Logic deep-dive: safeguard loop and atomic promotion
+11. Logic deep-dive: JSON defense pipeline
+12. Logic deep-dive: language detection and sentence splitting
+13. Evaluation harness (baseline vs ALMA)
+14. Terminal UI: phase renderer, ghost mascot, language badge
+15. Prompt templates
+16. Security: API key handling and .gitignore
+17. Testing: classes and coverage
+18. Runtime flows (single task, evaluate, version)
+19. Coding rules
+20. Cross-references
+
+
+================================================================================
+01. OVERVIEW AND MISSION
+================================================================================
+The brief asks for a "stem agent": an AI agent that, like a stem cell, starts
+unspecialized; reads its environment (a task); researches how that class of
+problem is typically solved; designs and assembles itself; validates that
+design in a safeguarded loop; stops when it is "good enough"; and only then
+executes. No hardcoded specializations.
+
+Chosen problem class: linguistic transformation between English, Spanish, and
+Portuguese. Sub-types: translation, transcreation, localization, style
+transfer. The agent does not know in advance which sub-type its input is.
+
+ALMA is a Java 21 (compiled with JDK 24+) Gradle project, terminal-only, using
+LangChain4j on top of the OpenAI Chat Completions API for LLM calls and a set
+of mature JVM libraries for deterministic NLP, JSON, and CLI rendering.
+
+The architectural authority is skill.md at the project root. CLAUDE.md
+governs style and the assistant communication protocol.
+
+
+================================================================================
+02. REPOSITORY LAYOUT (FULL TREE)
+================================================================================
+ALMA/
+├── build.gradle.kts                Application plugin, ReplaceTokens, -parameters
+├── settings.gradle.kts             rootProject.name = "ALMA"
+├── gradle/
+│   ├── libs.versions.toml          Pinned dependency versions
+│   └── wrapper/                    Gradle 9.4 wrapper
+├── gradlew, gradlew.bat            Wrapper scripts
+├── .gitignore                      Includes a "Secrets - never commit" block
+├── CLAUDE.md                       Style and communication rules
+├── skill.md                        Architecture source of truth
+├── README.md                       User-facing run instructions
+├── plans/
+│   ├── plan.md                     Master plan with milestones
+│   └── 01..08-*.md                 Sub-plans (Bootstrap, Pipeline core, ...)
+├── docs/
+│   ├── DEV_LOG.txt                 Running development log (chronological)
+│   ├── PROJECT_DOC.txt             THIS FILE (comprehensive reference)
+│   └── writeup.md                  <=4-page submission write-up
+├── src/main/java/alma/
+│   ├── Main.java                   Entry point: env fail-fast, then picocli
+│   ├── cli/
+│   │   ├── AlmaCommand.java        picocli root + run, evaluate, version
+│   │   ├── AlmaVersionProvider.java IVersionProvider reading alma.properties
+│   │   └── ui/
+│   │       ├── AsciiBanner.java    UTF-8 classpath banner loader
+│   │       ├── AnsiPalette.java    ANSI codes + global enable/disable toggle
+│   │       ├── PhaseRenderer.java  Phase header lines and ok/FAIL markers
+│   │       ├── GhostStates.java    Enum mapping states to banner files
+│   │       ├── GhostStateTracker.java Dedupes consecutive same-state renders
+│   │       ├── LanguageProvider.java Interface for the language-pair badge
+│   │       ├── EnglishOnlyLanguageProvider.java Stub fallback
+│   │       └── LanguageBadge.java   [ EN -> PT ] with arrow-encoding fallback
+│   ├── config/
+│   │   ├── AlmaConfig.java         Immutable record (version, key, models, ...)
+│   │   ├── EnvLoader.java          env > properties > defaults; require key
+│   │   └── MissingEnvException.java Thrown when required env var missing
+│   ├── core/
+│   │   ├── Phase.java              Pipeline phase interface
+│   │   ├── AgentContext.java       Mutable carrier between phases
+│   │   ├── StemCell.java           Pipeline owner. Builds + runs 7 phases
+│   │   ├── MutationException.java  Checked. Pipeline-level failure
+│   │   └── pipeline/
+│   │       ├── IntakePhase.java    No-LLM stub: stores rawInput
+│   │       ├── ProbePhase.java     LLM call -> ProbeReport JSON
+│   │       ├── BlueprintPhase.java LLM call -> Blueprint JSON
+│   │       ├── MutationPhase.java  Builds candidate SpecializedAgent
+│   │       ├── SafeguardLoopPhase.java Iterative refinement + 4 stop rules
+│   │       ├── ExecutionPhase.java Calls SpecializedAgent.execute(input)
+│   │       ├── ReportPhase.java    Prints final answer + round count
+│   │       ├── AgentFactory.java   Functional iface used by Mutation + Loop
+│   │       ├── BlueprintRefiner.java  Functional iface for refinement step
+│   │       └── LlmBlueprintRefiner.java Production refiner (LLM-backed)
+│   ├── agents/
+│   │   ├── SpecializedAgent.java   Single class. Behavior driven by Blueprint
+│   │   ├── Blueprint.java          Record: title, prompt, tools, criteria, ...
+│   │   ├── EvalCriterion.java      Record: name, weight, description
+│   │   ├── ProbeReport.java        Record: subSkills, tools, criteria, seeds
+│   │   ├── EvalTaskSeed.java       Record: input + expectedReference
+│   │   ├── EvalTask.java           Record: id, input, references
+│   │   ├── EvalReport.java         Record: task scores, average, failures
+│   │   └── TaskScore.java          Record: taskId, score, hypothesis
+│   ├── llm/
+│   │   ├── OpenAiClient.java       Wraps two ChatLanguageModel instances
+│   │   ├── PromptTemplates.java    Loads probe/blueprint/refine/judge .txt
+│   │   ├── JsonExtractor.java      Strips Markdown fences and prose
+│   │   ├── AlmaJackson.java        Shared ObjectMapper + ParameterNamesModule
+│   │   ├── ToolRegistry.java       Interface (names, resolve)
+│   │   ├── DummyToolRegistry.java  Empty shell (kept for tests)
+│   │   └── DefaultToolRegistry.java Real registry: 5 singletons by name
+│   ├── nlp/
+│   │   ├── LanguageDetector.java   Optimaize wrapper, ISO-639-1 codes
+│   │   ├── Tokenizer.java          OpenNLP SimpleTokenizer
+│   │   ├── SentenceSplitter.java   OpenNLP SentenceDetectorME, EN/ES/PT models
+│   │   ├── IcuNormalizer.java      ICU4J NFC normalization
+│   │   └── TermBaseLookup.java     JSON-backed term -> translation map
+│   └── eval/
+│       ├── BaselineAgent.java      Single LLM call. The "before"
+│       ├── BenchmarkSet.java       Loads benchmarks/linguistic.json
+│       ├── BenchmarkEntry.java     Record: id, subType, input, references
+│       ├── EvalRow.java            Internal record (entry, scores, outputs)
+│       ├── Metric.java             chrF (n=6, beta=2)
+│       ├── ChrfScorer.java         Wraps Metric.chrF for the Scorer interface
+│       ├── JudgeScorer.java        LLM-as-judge with reasoning-first JSON
+│       ├── CompositeScorer.java    Routes by reference presence
+│       ├── JudgeReport.java        Record: reasoning, scores, overall
+│       ├── Scorer.java             Functional interface
+│       ├── DummyScorer.java        Constant 0.7 (kept for the loop tests)
+│       ├── EvalHarness.java        Orchestrates baseline vs ALMA per entry
+│       └── EvalReportWriter.java   Markdown report renderer
+├── src/main/resources/
+│   ├── alma.properties             alma.version=@version@ (Gradle filtered)
+│   ├── logback.xml                 INFO console, dev.langchain4j -> ERROR
+│   ├── prompts/                    probe.txt, blueprint.txt, refine.txt, judge.txt
+│   ├── banners/                    alma-{base,thinking,probing,mutating,
+│   │                                       speaking,error}.txt
+│   ├── nlp/en-sent.bin, es-sent.bin, pt-sent.bin   OpenNLP UD-1.3 models
+│   ├── termbase.json               EN/ES/PT terminology starter
+│   └── benchmarks/linguistic.json  15 hand-curated eval entries
+└── src/test/java/alma/
+    ├── agents/SpecializedAgentExecuteTest.java
+    ├── core/pipeline/SafeguardLoopStoppingRulesTest.java
+    ├── eval/MetricChrFTest.java
+    ├── llm/JsonExtractorTest.java
+    └── nlp/{LanguageDetector,Tokenizer,SentenceSplitter,
+              IcuNormalizer,TermBaseLookup}Test.java
+
+
+================================================================================
+03. BUILD SYSTEM
+================================================================================
+- Gradle 9.4 (Kotlin DSL). Wrapper bundled; no global Gradle install needed.
+- The `application` plugin makes `./gradlew run --args=...` work.
+- `mainClass = "alma.Main"`. Standard scripts produced under build/distributions.
+- Source/target compatibility = Java 21 (`sourceCompatibility = VERSION_21`,
+  `targetCompatibility = VERSION_21`). The dev box uses JDK 24+; targeting 21
+  bytecode keeps the binary portable without forcing a toolchain download.
+- Compiler args: `-parameters`. This retains parameter names in bytecode so
+  Jackson can bind JSON to canonical record constructors via
+  ParameterNamesModule -- no @JsonProperty annotations needed on records.
+- Compiler encoding: UTF-8.
+- Resource filtering: `tasks.processResources` runs an Ant ReplaceTokens filter
+  on `alma.properties` only, swapping `@version@` for `project.version`.
+  This gives one source of truth for the version string: bump in
+  build.gradle.kts and the Java side reads it through AlmaVersionProvider.
+- Custom task: `tasks.register<JavaExec>("evaluate")` invokes alma.Main with
+  args=["evaluate"]. Inherits stdin so OPENAI_API_KEY env var passes through.
+
+Dependencies (gradle/libs.versions.toml):
+  langchain4j-openai           dev.langchain4j:langchain4j-open-ai 0.35.0
+  picocli + picocli-codegen    info.picocli                        4.7.6
+  opennlp-tools                org.apache.opennlp:opennlp-tools    2.3.3
+  language-detector            com.optimaize.languagedetector       0.6
+  icu4j                        com.ibm.icu                         75.1
+  jackson-databind             com.fasterxml.jackson.core         2.17.2
+  jackson-module-parameter-names com.fasterxml.jackson.module      2.17.2
+  slf4j-api                    org.slf4j                          2.0.13
+  logback-classic              ch.qos.logback                      1.5.6
+  junit-bom + jupiter          org.junit.jupiter                  5.10.3
+  junit-platform-launcher      org.junit.platform                  -- (BOM)
+  assertj-core                 org.assertj                        3.26.3
+
+
+================================================================================
+04. CONFIGURATION AND ENVIRONMENT
+================================================================================
+AlmaConfig is an immutable record with these fields:
+  version           From classpath alma.properties (filtered by Gradle).
+  openAiApiKey      Read ONLY from OPENAI_API_KEY env var.
+  modelProbe        Default "gpt-4o-mini". Overridable: ALMA_MODEL_PROBE.
+  modelExec         Default "gpt-4o".      Overridable: ALMA_MODEL_EXEC.
+  logLevel          Default "INFO".        Overridable: ALMA_LOG_LEVEL.
+  benchmarkPath     Default "benchmarks/linguistic.json".
+                                            Overridable: ALMA_BENCHMARK_PATH.
+
+EnvLoader.load() builds the AlmaConfig. Precedence per field: env var > entry
+in alma.properties > hardcoded default.
+
+EnvLoader.requireOpenAiKey(config) is the only place that decides whether the
+API key is present. It throws MissingEnvException if blank.
+
+Main.java is the only place that calls requireOpenAiKey, and only when the
+args contain "run" or "evaluate". `version`, `--version`, `-V`, `--help`, `-h`
+all bypass the gate. On miss, Main writes a single line to System.err and
+exits 1 -- BEFORE picocli runs, so the user never sees parse errors stacked
+on top of an environment error.
+
+
+================================================================================
+05. ARCHITECTURE: THE SEVEN-PHASE PIPELINE
+================================================================================
+The pipeline runs in this order. Each phase is a small Java class implementing
+the Phase interface.
+
+  +------------------------------------------------------------------+
+  |  [ Intake ] -> [ Probe ] -> [ Blueprint ] -> [ Mutation ]         |
+  |                                                       \          |
+  |                                                  [ SafeguardLoop ]|
+  |                                                       /          |
+  |                                                [ Execution ]      |
+  |                                                       \          |
+  |                                                   [ Report ]      |
+  +------------------------------------------------------------------+
+
+State flows through AgentContext, a mutable carrier object:
+  rawInput              -- the user's text.
+  classHint             -- optional category hint.
+  probe   (ProbeReport) -- written by ProbePhase.
+  blueprint (Blueprint) -- written by BlueprintPhase, possibly updated by Loop.
+  lastGoodBlueprint     -- previous blueprint, set on each promotion.
+  agent (SpecializedAgent) -- written by MutationPhase, swapped by Loop.
+  result (String)       -- written by ExecutionPhase.
+  evolutionTrace        -- list of strings, one per round outcome.
+
+StemCell owns the phase list. Its constructor builds the dependencies
+(OpenAiClient, ToolRegistry, BlueprintRefiner, AgentFactory, Scorer) and wires
+them into the seven phases. Its `run(rawInput)` method iterates phases in a
+plain `for` loop, prints a header per phase via PhaseRenderer, switches the
+ghost mascot per phase via GhostStateTracker, and prints the language badge
+once after Intake. On MutationException it returns exit code 1; on success 0.
+
+
+================================================================================
+06. THE STEM-AGENT THESIS
+================================================================================
+There is exactly ONE SpecializedAgent Java class. Adding new "kinds" of agents
+NEVER requires adding Java code; it requires a different Blueprint. The
+Blueprint is produced at runtime by the LLM during the Probe and Blueprint
+phases. SpecializedAgent.execute(input) calls the OpenAiClient with the
+Blueprint's systemPrompt.
+
+This is the brief's "agent that decides what to become". A `switch` over a
+"problemType" returning different subclasses is forbidden; CLAUDE.md and
+skill.md both call it out as the anti-pattern.
+
+The mutation pattern:
+  1. ProbePhase asks the LLM how this class of task is typically solved.
+     Output: ProbeReport JSON with sub-skills, suggested tool names,
+     evaluation criteria, and a small set of structured synthetic test seeds.
+  2. BlueprintPhase asks the LLM to design the agent. Output: Blueprint JSON
+     (title, systemPrompt, toolNames, criteria, modelName, scoreThreshold,
+     maxRefinementRounds).
+  3. MutationPhase instantiates a SpecializedAgent from the Blueprint via the
+     AgentFactory. Tools are resolved by name through ToolRegistry. If a name
+     is unknown, the registry throws and Mutation re-throws as
+     MutationException; the current agent stays untouched.
+  4. SafeguardLoopPhase iterates Refinement -> Mutation -> scoring until one
+     of four stopping rules fires (see section 10).
+  5. ExecutionPhase finally runs the agent on the user's actual input.
+
+Why this matters for the brief: the agent's specialization happens through
+data (the Blueprint JSON) flowing at runtime through the same code path; the
+JVM bytecode does not change shape per task.
+
+
+================================================================================
+07. THE BLUEPRINT (RUNTIME CONFIGURATION)
+================================================================================
+public record Blueprint(
+    String title,                  -- short label for logs and reports
+    String systemPrompt,           -- the agent's actual persona and rules
+    List<String> toolNames,        -- subset of registered tool names
+    List<EvalCriterion> criteria,  -- judge rubric weights
+    String modelName,              -- gpt-4o (production exec model)
+    double scoreThreshold,         -- e.g. 0.75
+    int    maxRefinementRounds     -- e.g. 3
+)
+
+The LLM is instructed to return camelCase JSON exactly matching this shape.
+JsonExtractor strips any Markdown fences first; Jackson then binds via
+ParameterNamesModule (no @JsonProperty noise on the record).
+
+
+================================================================================
+08. COMPONENT REFERENCE -- PACKAGE BY PACKAGE
+================================================================================
+
+8.1 alma  (Main only)
+---------------------
+Main.main() does three things in order:
+  (1) Build AlmaConfig via EnvLoader.load.
+  (2) If args[] contains "run" or "evaluate", call requireOpenAiKey -- on a
+      MissingEnvException, print "ALMA: missing OPENAI_API_KEY. Set it and
+      retry." to System.err and System.exit(1).
+  (3) Construct AlmaCommand(config) and run picocli.
+
+8.2 alma.cli
+------------
+AlmaCommand is the picocli @Command root. Subcommands:
+  run "<task>" [--lang <iso>] [--no-color]   -> Callable<Integer>
+  evaluate                  [--no-color]     -> Callable<Integer>
+  version                                    -> prints "ALMA <version>"
+
+@ParentCommand AlmaCommand parent gives subcommands access to AlmaConfig
+without static singletons.
+
+AlmaVersionProvider implements picocli.CommandLine.IVersionProvider and reads
+alma.properties to print the version on `--version` and `-V`.
+
+8.3 alma.cli.ui
+---------------
+AsciiBanner.load(name) reads `banners/<name>.txt` from classpath as UTF-8.
+AnsiPalette holds named ANSI codes. AnsiPalette.setEnabled(boolean) globally
+turns colors off; the c(code) helper returns "" when disabled.
+PhaseRenderer prints headers like
+  "| [3/7] Blueprint .................. * ok"
+GhostStates is the enum (BASE, THINKING, PROBING, MUTATING, SPEAKING, ERROR).
+GhostStateTracker dedupes consecutive same-state renders; markInitial(BASE) is
+called by StemCell so the boot banner is not redrawn.
+LanguageProvider is the @FunctionalInterface used by LanguageBadge.
+EnglishOnlyLanguageProvider returns "en" always (used when DefaultToolRegistry
+is absent).
+LanguageBadge renders [ EN -> PT ] (cyan source, magenta target, dim frame).
+The arrow becomes "->" if AnsiPalette is disabled OR stdout encoding is not
+UTF-8 (checks stdout.encoding, sun.stdout.encoding, native.encoding, then
+file.encoding).
+
+8.4 alma.config
+---------------
+AlmaConfig (record), EnvLoader, MissingEnvException. See section 4.
+
+8.5 alma.core
+-------------
+Phase: { String name(); void run(AgentContext) throws MutationException; }
+AgentContext: mutable carrier; getters/setters with verb-style names.
+MutationException extends Exception (checked) and is the pipeline's failure
+type.
+StemCell owns the seven phases as a List<Phase>, builds shared dependencies
+once, runs the loop. Logs phase headers and ghost transitions.
+
+8.6 alma.core.pipeline
+----------------------
+IntakePhase, ReportPhase: no-LLM bookends.
+ProbePhase, BlueprintPhase: real LLM calls + JsonExtractor + Jackson, with
+one repair retry on parse failure.
+MutationPhase: builds the candidate agent via AgentFactory.
+SafeguardLoopPhase: section 10.
+ExecutionPhase: agent.execute(rawInput) -> context.result.
+AgentFactory @FunctionalInterface: Blueprint -> SpecializedAgent. Production
+lambda lives in StemCell. Tests inject stubs.
+BlueprintRefiner @FunctionalInterface: (current, report) -> next Blueprint.
+LlmBlueprintRefiner is the production impl backed by OpenAiClient.
+
+8.7 alma.agents
+---------------
+Records: Blueprint, EvalCriterion, ProbeReport, EvalTaskSeed, EvalTask,
+EvalReport, TaskScore.
+SpecializedAgent (NON-final class so tests can override execute()):
+  - constructor(Blueprint, OpenAiClient, ToolRegistry)
+  - execute(String input) -> calls client.chatExec(blueprint.systemPrompt, input)
+  - name() -> blueprint.title()
+  - blueprint() accessor
+  - protected client() and registry() accessors for subclasses
+The class is intentionally not final so test code can pass anonymous
+subclasses returning fixed strings to drive stopping-rule logic.
+
+8.8 alma.llm
+------------
+OpenAiClient wraps two LangChain4j ChatLanguageModel instances:
+  probeModel = OpenAiChatModel.builder().modelName(modelProbe).maxRetries(1)
+  execModel  = OpenAiChatModel.builder().modelName(modelExec).maxRetries(1)
+maxRetries=1 makes auth-error and network-down failures surface in seconds
+(default 3 attempts caused multi-second waits with no extra signal).
+chatProbe(system,user) and chatExec(system,user) take a system prompt and a
+user prompt; underneath they call generate(SystemMessage, UserMessage) and
+return response.content().text().
+
+PromptTemplates loads each prompt file once at class init via
+StandardCharsets.UTF_8 and splits each on the literal "=== USER ===" marker.
+render(template, vars) replaces {{ snake_case }} placeholders.
+
+JsonExtractor.clean(raw) strips outermost ```json ... ``` and ``` ... ```
+fences, then slices from the first `{` to the last `}` if there is prose
+around the JSON. Returns "" for null input. ~45 lines.
+
+AlmaJackson.mapper() returns the project-wide ObjectMapper:
+  JsonMapper.builder().addModule(new ParameterNamesModule()).build()
+This is what binds Jackson to record canonical constructors without
+@JsonProperty annotations.
+
+ToolRegistry interface: names() and resolve(List<String>).
+DummyToolRegistry: empty shell. Useful for tests and as the historical
+Day-3 stand-in.
+DefaultToolRegistry holds the five real tool singletons (LanguageDetector,
+Tokenizer, SentenceSplitter, IcuNormalizer, TermBaseLookup). resolve() throws
+IllegalArgumentException on unknown name; MutationPhase wraps that as a
+MutationException.
+
+8.9 alma.nlp
+------------
+See section 12 for behavior. Each public tool method carries the
+dev.langchain4j.agent.tool.@Tool annotation with a short description string.
+Without @Tool, LangChain4j AiServices ignores the method, regardless of
+whether ToolRegistry.resolve returns the instance.
+
+8.10 alma.eval
+--------------
+BaselineAgent: single LLM call to gpt-4o with a generic system prompt. No
+tools, no probe, no blueprint, no refinement. The "before" the eval compares.
+
+BenchmarkSet.load(resourcePath) reads a JSON array of BenchmarkEntry records
+from the classpath via AlmaJackson. linguistic.json ships with 15 entries.
+
+Metric.chrF(hyp, refs): character n-gram F-score, n=6, beta=2. ~70 lines.
+Returns the best F across all references.
+
+ChrfScorer wraps Metric.chrF behind the Scorer interface.
+JudgeScorer wraps a single LLM judge call (gpt-4o-mini) returning a
+JudgeReport (reasoning + per-criterion scores + overall). Falls back to 0.5
+neutral on any error.
+CompositeScorer routes by reference presence: chrF if non-empty references,
+judge otherwise. Used inside the safeguard loop where EvalTask carries no
+sub-type. The harness uses chrFScorer / judgeScorer directly per
+BenchmarkEntry.subType.
+
+EvalHarness orchestrates the eval (section 13).
+EvalReportWriter renders the markdown report.
+
+
+================================================================================
+09. TOOLS, LIBRARIES, AND WHY EACH ONE
+================================================================================
+LangChain4j (dev.langchain4j:langchain4j-open-ai 0.35.0)
+  - Java agent framework. Provides ChatLanguageModel, AiServices, @Tool.
+  - Why: idiomatic OpenAI integration without writing HTTP plumbing.
+  - Caveat: emits WARN-level retry logs through SLF4J. Pinned to ERROR in
+    logback.xml so phase headers stay readable on auth failures.
+
+picocli (info.picocli:picocli 4.7.6) + picocli-codegen
+  - CLI parser. @Command, @Option, @Parameters, @ParentCommand.
+  - Why: annotations + ANSI markup, no full-screen TUI. Lanterna and JLine
+    were rejected in favor of plain scrolling output (skill.md section 12).
+
+OpenNLP (org.apache.opennlp:opennlp-tools 2.3.3)
+  - SimpleTokenizer.INSTANCE for tokenization (no model needed).
+  - SentenceDetectorME for sentence splitting (loads .bin model per language).
+  - Why: Apache 2.0, lightweight, ships small UD-1.3 models.
+
+Optimaize language-detector (com.optimaize.languagedetector 0.6)
+  - Builds a LanguageDetector from bundled language profiles.
+  - Why: deterministic JVM-only language detection; perfect for the EN/ES/PT
+    closed domain.
+  - Caveat: ships com.google.common.base.Optional from Guava, not java.util.
+    We bypass that surface by calling getProbabilities(text) and taking the
+    top entry.
+
+ICU4J (com.ibm.icu:icu4j 75.1)
+  - Normalizer2.getNFCInstance() for Unicode NFC normalization.
+  - Why: locale-correct Unicode for transcreation/localization tasks involving
+    diacritics in ES/PT.
+
+Jackson (com.fasterxml.jackson.core:jackson-databind 2.17.2)
+  - Plus jackson-module-parameter-names 2.17.2.
+  - Why: maps strict-JSON LLM responses into Java records WITHOUT
+    @JsonProperty annotations. Requires `-parameters` compiler flag.
+
+SLF4J + Logback (2.0.13 / 1.5.6)
+  - Standard logging surface.
+  - Why: SLF4J is what LangChain4j and OpenNLP both use. Logback is the
+    runtime; its config (src/main/resources/logback.xml) pins
+    `dev.langchain4j` and `dev.ai4j` to ERROR to suppress noisy retry logs.
+
+JUnit 5 + AssertJ (5.10.3 / 3.26.3)
+  - Test framework + readable assertions. AssertJ's `isCloseTo(value,
+    within(0.001))` is what verifies the chrF math.
+
+
+================================================================================
+10. LOGIC DEEP-DIVE: SAFEGUARD LOOP AND ATOMIC PROMOTION
+================================================================================
+SafeguardLoopPhase is single-use. StemCell creates a fresh instance per run,
+so the mutable instance fields (current, currentAgent, currentReport, tests,
+roundsWithoutImprovement) are reset between runs.
+
+run(context) does this:
+
+  1. setup(context):
+       - Reads context.blueprint() and context.agent().
+       - Builds the synthetic test list from probe.syntheticTasks() (each
+         seed already carries an expectedReference, so we map directly to
+         EvalTask without an extra LLM call).
+       - Scores the current agent once -> currentReport.
+       - Appends "round 0: score=X.XXX initial" to evolutionTrace.
+
+  2. atThreshold(0): if currentReport.average >= scoreThreshold, append
+       "stop: threshold met at round 0" and exit.
+
+  3. for round = 1 to maxRefinementRounds:
+       - refiner.refine(current, currentReport) -> candidate Blueprint.
+         Refiner asks the LLM for a COMPLETE updated Blueprint JSON, never a
+         diff. One repair retry on parse failure.
+       - factory.build(candidate) -> candidate SpecializedAgent. Tool
+         resolution validates names; an unknown name throws and the loop
+         catches it as a mutation error.
+       - score(candidateAgent, tests) -> candidateReport.
+       - promoteIfBetter(round, candidate, candidateAgent, candidateReport):
+           atLeastEqual = candidate.avg >= current.avg
+           strictlyBetter = candidate.avg >  current.avg
+           if atLeastEqual:
+               context.setLastGoodBlueprint(current);
+               current = candidate;
+               currentAgent = candidateAgent;
+               currentReport = candidateReport;
+               context.setBlueprint(current); context.setAgent(currentAgent);
+           if strictlyBetter:
+               roundsWithoutImprovement = 0;
+               trace "promoted"
+           else:
+               roundsWithoutImprovement++;
+               trace "tied" or "rejected"
+       - atThreshold(round, "post-round"): stop if score met.
+       - if roundsWithoutImprovement >= 2: stop "rounds without improvement".
+
+  4. After the for-loop ends naturally: trace "stop: budget exhausted".
+
+Stopping rules summarized:
+  R1. Threshold met (any time after a scoring pass).
+  R2. Budget exhausted (round counter reaches maxRefinementRounds).
+  R3. Two consecutive rounds without strict improvement.
+  R4. MutationException during refinement OR mutation -> rollback to
+      lastGoodBlueprint.
+
+Why split atomic promotion (>=) from improvement tracking (>)? With a
+constant-value scorer like DummyScorer (returns 0.7 always), candidate==
+current promotes via R-promotion semantics, which is correct per the brief
+("atomic, takes ties"). But if the patience counter also reset on equality,
+R3 would never fire and the loop would always exhaust the budget. The split
+preserves both behaviors; it is unit-tested in
+SafeguardLoopStoppingRulesTest.
+
+Generator/Evaluator split: the candidate SpecializedAgent (Generator) uses
+Blueprint.modelName (=gpt-4o, the production execution model). The judge
+(Evaluator) uses gpt-4o-mini. The split is required so the loop measures the
+agent that actually ships, not a cheaper proxy.
+
+
+================================================================================
+11. LOGIC DEEP-DIVE: JSON DEFENSE PIPELINE
+================================================================================
+Every LLM response that should be JSON goes through this funnel:
+
+  raw response --> JsonExtractor.clean() --> AlmaJackson.mapper().readValue()
+
+JsonExtractor.clean(raw):
+  1. raw.strip()
+  2. If text starts with "```":
+       - Drop everything up to (and including) the first newline.
+       - Drop everything from the last "```" onward.
+       - Strip whitespace.
+  3. Slice from the first '{' to the last '}' (handles prose-wrapped JSON
+     like "Sure, here you go: { ... } cheers!").
+  4. Return the inner JSON string. Returns "" for null input.
+
+AlmaJackson.mapper() is built once via:
+    JsonMapper.builder().addModule(new ParameterNamesModule()).build()
+
+The combination of ParameterNamesModule and the `-parameters` compiler flag
+lets Jackson map JSON keys directly to record component names. We never need
+@JsonProperty on records.
+
+On parse failure, every phase that consumes a JSON LLM response (ProbePhase,
+BlueprintPhase, JudgeScorer, LlmBlueprintRefiner) attempts ONE repair retry
+with this prompt:
+
+    "Your previous output was not valid JSON or did not match the schema.
+     Bad output:
+     <previous text>
+     Return ONLY the corrected JSON now. No prose. No fences."
+
+If the repaired response also fails to parse, the phase throws
+MutationException with a readable message (no stack-trace dumps in normal
+output).
+
+
+================================================================================
+12. LOGIC DEEP-DIVE: LANGUAGE DETECTION AND SENTENCE SPLITTING
+================================================================================
+LanguageDetector
+  - Loads ALL built-in Optimaize language profiles at construction.
+  - getProbabilities(text) returns a ranked list; we take the top
+    DetectedLanguage and read .getLocale().getLanguage() (ISO-639-1).
+  - Why getProbabilities and not detect? .detect returns
+    com.google.common.base.Optional<LdLocale>; absent for short or noisy
+    input. getProbabilities always returns the best candidate. We reserve
+    "und" for genuinely empty input.
+
+SentenceSplitter
+  - Loads three OpenNLP SentenceDetectorME models eagerly into a
+    Map<String, SentenceDetectorME> keyed by ISO code (en/es/pt).
+  - Two methods:
+      sentenceSplit(text, language)  -- explicit language.
+      sentenceSplit(text)            -- calls LanguageDetector internally.
+    The single-arg overload exists because we cannot trust the LLM to call
+    detectLanguage before sentenceSplit. Defaulting silently to English would
+    mangle "¿Podrías..." or PT clitic contractions.
+  - SentenceDetectorME is not thread-safe; the shared instance is used inside
+    a synchronized block (single JVM, single tool call at a time, but explicit
+    is safer than implicit).
+
+Tokenizer
+  - OpenNLP SimpleTokenizer.INSTANCE is a stateless singleton. No model file.
+  - Returns String[]. Empty input -> empty array.
+
+IcuNormalizer
+  - Normalizer2.getNFCInstance().normalize(text). Pre-composed and decomposed
+    diacritics collapse to the same form, which matters for hashing /
+    comparing strings before transcreation.
+
+TermBaseLookup
+  - Layout: from-lang -> to-lang -> term -> translation.
+  - Backed by src/main/resources/termbase.json (Jackson-loaded at
+    construction).
+  - Returns "" on any miss. Null-safe.
+
+
+================================================================================
+13. EVALUATION HARNESS
+================================================================================
+EvalHarness drives `./gradlew evaluate` and the CLI `evaluate` subcommand.
+
+Pipeline:
+
+  for each BenchmarkEntry in linguistic.json (15 entries):
+      baselineOut = BaselineAgent.execute(entry.input)
+      almaOut     = runAlmaQuiet(entry.input)         (see below)
+      bScore = scoreFor(entry, baselineOut)
+      aScore = scoreFor(entry, almaOut)
+      append EvalRow(entry, bScore, aScore, baselineOut, almaOut)
+
+  print ASCII summary table by sub-type
+  EvalReportWriter.writeMarkdown(rows) -> build/reports/eval-<ts>.md
+
+runAlmaQuiet(input):
+  - Builds AgentContext, runs IntakePhase, ProbePhase, BlueprintPhase,
+    MutationPhase, ExecutionPhase.
+  - DOES NOT run SafeguardLoopPhase (cost). The loop runs only in live
+    `./gradlew run` mode. Documented in DEV_LOG and writeup.
+  - Returns context.result(). Any MutationException -> "" (empty hyp -> 0.0
+    chrF or 0.5 judge fallback).
+
+scoreFor(entry, hyp):
+  - useChrf(entry) ? chrfScorer.score : judgeScorer.score
+  - useChrf returns true for translation; for localization with non-empty
+    references; false for transcreation and style.
+
+EvalReportWriter.aggregate(rows): builds a Map<subType, double[3]> where
+[0]=baselineSum, [1]=almaSum, [2]=count, plus an "overall" row covering all
+entries.
+
+EvalReportWriter.writeMarkdown(rows): writes a Markdown file with a
+per-sub-type summary table and a per-entry detail block (input, reference,
+baseline output and score, ALMA output and score, notes). All decimals use
+Locale.ROOT for `.`-as-separator stability across machines.
+
+
+================================================================================
+14. TERMINAL UI
+================================================================================
+PhaseRenderer prints lines like:
+    | [3/7] Blueprint .................. * ok
+The prefix is dim gray, the trailing "* ok" is green, "* FAIL: msg" is red.
+Phase header padded to 42 columns with trailing dots.
+
+GhostStates is an enum: BASE, THINKING, PROBING, MUTATING, SPEAKING, ERROR.
+Each value's resourceName() is "alma-<state>" -- AsciiBanner.load resolves
+that to src/main/resources/banners/alma-<state>.txt as UTF-8.
+
+GhostStateTracker.show(state) is a no-op when state == last; otherwise it
+prints a blank line, then the colored ghost, then ANSI RESET. The ghost color
+is per-state: ERROR=red, MUTATING=yellow, SPEAKING=cyan, default=muted gray.
+StemCell calls markInitial(BASE) before the loop because AlmaCommand already
+printed the boot banner via AsciiBanner.print(out, "alma-base").
+
+State mapping in StemCell:
+    Intake        -> THINKING
+    Probe         -> PROBING
+    Blueprint     -> PROBING
+    Mutation      -> MUTATING
+    SafeguardLoop -> MUTATING
+    Execution     -> SPEAKING
+    Report        -> SPEAKING
+    on MutationException -> ERROR
+
+LanguageBadge prints once after Intake. Source language comes from the
+provider (LanguageDetector when DefaultToolRegistry is wired,
+EnglishOnlyLanguageProvider stub otherwise). Target language comes from the
+--lang flag, or "??" if the flag is missing.
+
+Arrow fallback: the Unicode arrow `->` (U+279C in spec, displayed in ASCII
+docs) is replaced with `->` whenever ANY of these is true:
+  - --no-color flag set.
+  - System.out's encoding is not UTF-8 (we check stdout.encoding,
+    sun.stdout.encoding, native.encoding, file.encoding in that order).
+  - AnsiPalette is disabled.
+The decision is cached at LanguageBadge construction so each call is cheap.
+
+
+================================================================================
+15. PROMPT TEMPLATES
+================================================================================
+src/main/resources/prompts/{probe,blueprint,refine,judge}.txt
+Each file uses two sections separated by the literal line "=== USER ===":
+  === SYSTEM ===
+  ... system instructions ...
+  === USER ===
+  ... user template with {{ snake_case }} placeholders ...
+
+PromptTemplates.{probe,blueprint,refine,judge}{System,User}() return the two
+strings.
+PromptTemplates.render(template, varsMap) replaces "{{ key }}" tokens with
+the value strings.
+
+Highlights:
+  probe.txt    -- demands strict camelCase JSON for ProbeReport including
+                  syntheticTasks: [{input, expectedReference}].
+  blueprint.txt-- demands strict camelCase Blueprint JSON; lists the five
+                  available tool names.
+  refine.txt   -- demands a COMPLETE updated Blueprint JSON, NOT a diff.
+                  This was a critical decision (see DEV_LOG): JSON-Patch in
+                  pure Java is a maintenance trap.
+  judge.txt    -- demands reasoning-first JSON:
+                  { "reasoning": str, "scores": {faithfulness, cultural_fit,
+                    fluency, brand_voice}, "overall": number }
+                  Reasoning before scores reduces same-family judge bias.
+
+
+================================================================================
+16. SECURITY: API KEY HANDLING AND .gitignore
+================================================================================
+The OpenAI API key has exactly ONE valid path into the program:
+  the OPENAI_API_KEY environment variable.
+
+It is never read from a file inside the repo. The relevant code:
+  - EnvLoader.readEnvOnly("OPENAI_API_KEY") reads only System.getenv.
+  - AlmaConfig holds the value; the openAiApiKey field is the only place.
+  - EnvLoader.requireOpenAiKey is the only place that raises on absence.
+  - Main.main is the only caller of requireOpenAiKey.
+  - OpenAiClient.build passes config.openAiApiKey() to OpenAiChatModel.builder.
+
+.gitignore includes a "Secrets - never commit" block:
+    .env
+    .env.*
+    *.env
+    secrets/
+    *.pem
+    *.key
+    local.properties
+    alma.local.properties
+
+Two layers of defense: code that does not write keys + paths that block
+common leakage files.
+
+When you have the real key, run the program in a shell:
+    export OPENAI_API_KEY="sk-..."
+    ./gradlew run --args='run --lang pt "Translate to PT: hello"'
+    ./gradlew evaluate
+
+The key never touches disk inside the repo.
+
+
+================================================================================
+17. TESTING
+================================================================================
+Unit tests in src/test/java/alma/. 35 total at last sanity sweep.
+
+  alma.llm.JsonExtractorTest                     6
+    leavesCleanJsonAlone, stripsJsonFence, stripsPlainFence,
+    slicesProseWrapped, slicesFencedAndProseWrapped, handlesNullInput.
+
+  alma.eval.MetricChrFTest                       5
+    identicalStringsReturnOne (1.000 within 0.001),
+    emptyHypothesisReturnsZero (incl. null),
+    noOverlapReturnsZero,
+    partialMatchAgainstHandComputed (7/18 ~ 0.3889),
+    picksBestReferenceWhenSeveralProvided.
+
+  alma.core.pipeline.SafeguardLoopStoppingRulesTest  5
+    stopsAtThresholdRound0,
+    stopsAfterTwoRoundsWithoutImprovement,
+    stopsAtBudgetExhausted,
+    rollsBackOnMutationError,
+    requiresBlueprintAndAgent.
+
+  alma.agents.SpecializedAgentExecuteTest        2
+    exposesNameFromBlueprint, executeIsOverridable.
+
+  alma.nlp.LanguageDetectorTest                  4
+    detects EN/ES/PT on 9 hand-picked sentences; "und" for blank.
+
+  alma.nlp.TokenizerTest                         2
+    splitsWordsAndPunctuation, emptyInputReturnsEmptyArray.
+
+  alma.nlp.SentenceSplitterTest                  4
+    EN paragraph split, ES paragraph with ¿/¡, PT paragraph via single-arg
+    overload, empty input.
+
+  alma.nlp.IcuNormalizerTest                     2
+    normalizesPrecomposedAndDecomposedToSameForm, emptyInputReturnsEmpty.
+
+  alma.nlp.TermBaseLookupTest                    5
+    findsKnownEnToEsTerm, findsKnownEnToPtTerm, unknownTermReturnsEmpty,
+    unknownLanguagePairReturnsEmpty, nullsAreSafe.
+
+
+================================================================================
+18. RUNTIME FLOWS
+================================================================================
+Single task:
+  $ export OPENAI_API_KEY="sk-..."
+  $ ./gradlew run --args='run --lang pt "Translate to PT: hello"'
+
+  AlmaCommand.RunCommand applies --no-color flag (if any), prints the boot
+  banner, and constructs new StemCell(config, "pt").run(task). The pipeline
+  walks 7 phases printing headers + ghost transitions + the language badge
+  after Intake. Any MutationException stops the pipeline and exits 1; success
+  exits 0. Picocli propagates the int from Callable<Integer>.
+
+Eval:
+  $ ./gradlew evaluate
+  AlmaCommand.EvaluateCommand prints the boot banner and delegates to
+  new EvalHarness(config).run(System.out). 15 entries are evaluated; the
+  ASCII summary lands on stdout and the markdown report on
+  build/reports/eval-<timestamp>.md.
+
+Version:
+  $ ./gradlew run --args='version'        -> "ALMA <version>"
+  $ ./gradlew run --args='--version'      -> same, via picocli mixin
+  $ ./gradlew run --args='-V'             -> same
+
+
+================================================================================
+19. CODING RULES
+================================================================================
+From CLAUDE.md and skill.md:
+  - English only: code, comments, commits, log lines.
+  - Comments <= 5 words, only when code cannot self-explain.
+  - Classes <= 200 lines, methods <= 30 lines.
+  - No reflection, no annotation-driven DI, no Lombok, no reactive
+    frameworks. Manual constructor injection only.
+  - One SpecializedAgent class. Behavior is data-driven (Blueprint).
+  - Caveman protocol in chat output (assistant only).
+  - Every assistant response ends with an [ENGRAM UPDATE] block.
+
+Sanity sweep at submission time:
+  - ./gradlew build    -> green.
+  - ./gradlew test     -> green.
+  - find src/main/java -name '*.java' -exec wc -l {} + | sort -rn | head -3
+    Largest at 2026-04-27: SafeguardLoopPhase.java 189 lines (under 200).
+
+
+================================================================================
+20. CROSS-REFERENCES
+================================================================================
+docs/DEV_LOG.txt  -- chronological development log. Append-only. Segments:
+                     ARCHITECTURE, TOOLS, DECISIONS, CHANGES, OPEN QUESTIONS,
+                     SURPRISES, FAILURES. The path of thinking lives here.
+docs/writeup.md   -- 4-page narrative write-up for the JetBrains submission.
+README.md         -- runnable instructions, project layout, pointers.
+skill.md          -- architecture source of truth (no chronology, just
+                     contracts).
+CLAUDE.md         -- assistant style + caveman protocol + Engram block rule.
+plans/plan.md and plans/01..08-*.md -- master plan and sub-plans, one per
+                     architectural slice. Each sub-plan has a checklist, file
+                     deliverables, DoD, blockers, and DEV_LOG cues.
+
+End of PROJECT_DOC.txt.

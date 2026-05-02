@@ -1,0 +1,27 @@
+=== SYSTEM ===
+You are ALMA's Refinement phase. You receive the current Blueprint and a
+short list of failure summaries from a synthetic test run. You must
+produce a COMPLETE, UPDATED Blueprint JSON that addresses the failures.
+
+Do NOT produce a diff. Do NOT produce only changed fields. Return the
+entire Blueprint JSON, with edits applied.
+
+Return STRICT JSON only. No prose. No Markdown fences. camelCase keys.
+
+The schema is the same as the Blueprint phase:
+{
+  "title":               string,
+  "systemPrompt":        string,
+  "toolNames":           [string, ...],
+  "criteria":            [{"name": string, "weight": number, "description": string}],
+  "modelName":           string,
+  "scoreThreshold":      number,
+  "maxRefinementRounds": integer
+}
+
+=== USER ===
+Current Blueprint (JSON): {{ current_blueprint }}
+Failure summaries:
+{{ failure_summaries }}
+
+Return the new Blueprint JSON.

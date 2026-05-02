@@ -1,0 +1,38 @@
+[versions]
+langchain4j      = "0.35.0"
+opennlp          = "2.3.3"
+languageDetector = "0.6"
+icu4j            = "75.1"
+picocli          = "4.7.6"
+jackson          = "2.17.2"
+slf4j            = "2.0.13"
+logback          = "1.5.6"
+junit            = "5.10.3"
+assertj          = "3.26.3"
+
+[libraries]
+# Core agent framework.
+langchain4j-openai      = { module = "dev.langchain4j:langchain4j-open-ai", version.ref = "langchain4j" }
+
+# Terminal UI.
+picocli                 = { module = "info.picocli:picocli", version.ref = "picocli" }
+picocli-codegen         = { module = "info.picocli:picocli-codegen", version.ref = "picocli" }
+
+# NLP and language detection.
+opennlp                 = { module = "org.apache.opennlp:opennlp-tools", version.ref = "opennlp" }
+languageDetector        = { module = "com.optimaize.languagedetector:language-detector", version.ref = "languageDetector" }
+icu4j                   = { module = "com.ibm.icu:icu4j", version.ref = "icu4j" }
+
+# JSON.
+jackson-databind        = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+jackson-parameterNames  = { module = "com.fasterxml.jackson.module:jackson-module-parameter-names", version.ref = "jackson" }
+
+# Logging.
+slf4j-api               = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logback-classic         = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+# Testing.
+junit-bom               = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter           = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platformLauncher  = { module = "org.junit.platform:junit-platform-launcher" }
+assertj                 = { module = "org.assertj:assertj-core", version.ref = "assertj" }

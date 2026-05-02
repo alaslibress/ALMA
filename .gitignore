@@ -1,0 +1,60 @@
+# ─── Build output ────────────────────────────────────────────────────────────
+build/
+out/
+!**/src/main/**/build/
+!**/src/test/**/build/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+# ─── Gradle ──────────────────────────────────────────────────────────────────
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ─── Secrets — never commit ───────────────────────────────────────────────────
+.env
+.env.*
+*.env
+secrets/
+*.pem
+*.key
+local.properties
+alma.local.properties
+
+# ─── IntelliJ IDEA ───────────────────────────────────────────────────────────
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# ─── VS Code ─────────────────────────────────────────────────────────────────
+.vscode/
+
+# ─── Eclipse ─────────────────────────────────────────────────────────────────
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+# ─── NetBeans ────────────────────────────────────────────────────────────────
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# ─── Internal dev tooling (not part of the submission) ───────────────────────
+.claude/
+.kotlin
+plans/
+CLAUDE.md
+skill.md
+
+# ─── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

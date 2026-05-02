@@ -1,0 +1,107 @@
+[
+  {
+    "id": "tr-en-es-1",
+    "subType": "translation",
+    "input": "Translate to Spanish: I will arrive late because of traffic.",
+    "references": ["Llegaré tarde por el tráfico."],
+    "notes": "Simple future, common phrase"
+  },
+  {
+    "id": "tr-en-es-2",
+    "subType": "translation",
+    "input": "Translate to Spanish: The quick brown fox jumps over the lazy dog.",
+    "references": ["El rápido zorro marrón salta sobre el perro perezoso."],
+    "notes": "Pangram, full sentence"
+  },
+  {
+    "id": "tr-en-pt-1",
+    "subType": "translation",
+    "input": "Translate to Portuguese: I will arrive late because of traffic.",
+    "references": ["Vou chegar atrasado por causa do trânsito."],
+    "notes": "Simple future, ir+infinitive form"
+  },
+  {
+    "id": "tr-en-pt-2",
+    "subType": "translation",
+    "input": "Translate to Portuguese: Open source lets the community improve our tools.",
+    "references": ["O código aberto permite que a comunidade melhore as nossas ferramentas."],
+    "notes": "Tech register"
+  },
+  {
+    "id": "tr-es-en-1",
+    "subType": "translation",
+    "input": "Translate to English: ¿Podrías pasarme la sal, por favor?",
+    "references": ["Could you pass me the salt, please?"],
+    "notes": "Polite request, opening punctuation"
+  },
+  {
+    "id": "tr-es-pt-1",
+    "subType": "translation",
+    "input": "Translate to Portuguese: Hoy hace mucho calor en la ciudad.",
+    "references": ["Hoje está muito calor na cidade."],
+    "notes": "ES -> PT, weather"
+  },
+  {
+    "id": "tr-pt-en-1",
+    "subType": "translation",
+    "input": "Translate to English: Adoro caminhar pela praia ao pôr do sol.",
+    "references": ["I love walking along the beach at sunset."],
+    "notes": "PT -> EN, register"
+  },
+  {
+    "id": "tr-pt-es-1",
+    "subType": "translation",
+    "input": "Translate to Spanish: O código aberto permite que a comunidade melhore as ferramentas.",
+    "references": ["El código abierto permite que la comunidad mejore las herramientas."],
+    "notes": "PT -> ES, tech register"
+  },
+  {
+    "id": "wd-en-es-1",
+    "subType": "translation",
+    "input": "What is 'deadline' in Spanish?",
+    "references": ["fecha límite", "plazo"],
+    "notes": "Single-term lookup, multiple acceptable references"
+  },
+  {
+    "id": "wd-en-pt-1",
+    "subType": "translation",
+    "input": "What is 'branch' in Portuguese (software)?",
+    "references": ["ramo", "ramificação"],
+    "notes": "Domain term, software"
+  },
+  {
+    "id": "ex-en-es-1",
+    "subType": "transcreation",
+    "input": "Give me one example sentence using 'agradable' in Spanish.",
+    "references": [],
+    "notes": "Open-ended; judge-scored"
+  },
+  {
+    "id": "ex-pt-1",
+    "subType": "transcreation",
+    "input": "Give me one example sentence using 'saudade' in Portuguese.",
+    "references": [],
+    "notes": "Cultural concept; judge-scored"
+  },
+  {
+    "id": "tc-en-pt-1",
+    "subType": "transcreation",
+    "input": "Transcreate this marketing tagline to Portuguese (PT-PT) for a coffee brand: 'Wake up your day.'",
+    "references": [],
+    "notes": "Brand voice; judge-scored"
+  },
+  {
+    "id": "tc-en-es-1",
+    "subType": "transcreation",
+    "input": "Transcreate this marketing tagline to Spanish (Mexico) for a streaming service: 'Stories that move you.'",
+    "references": [],
+    "notes": "Locale-aware brand voice; judge-scored"
+  },
+  {
+    "id": "st-en-1",
+    "subType": "style",
+    "input": "Rewrite this sentence in a formal register: 'Hey, I'm running late, see you in a bit.'",
+    "references": [],
+    "notes": "Style transfer; judge-scored"
+  }
+]
