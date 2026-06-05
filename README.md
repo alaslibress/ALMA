@@ -211,4 +211,4 @@ src/main/resources/
 ├── termbase.json                   EN/ES/PT terminology base
 └── benchmarks/linguistic.json      15-entry eval set
 ```
-# ALMA-for-JetBrains
+# ALMA
